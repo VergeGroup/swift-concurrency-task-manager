@@ -97,6 +97,21 @@ public actor TaskManagerActor {
     case waitInCurrent
   }
 
+  public var isRunning: Bool = true {
+    didSet {
+      guard isRunning else { return }
+      resume()
+    }
+  }
+
+  /**
+   Set the task manager is running or not.
+   If false, new task will not run until the isRunning is true.
+   */
+  public func setIsRunning(_ isRunning: Bool) {
+    self.isRunning = isRunning
+  }
+
   // MARK: Lifecycle
 
   public init(configuration: Configuration = .init()) {
@@ -187,7 +202,9 @@ public actor TaskManagerActor {
       }
 
       self.queues[key] = newNode
-      newNode.activate()
+      if isRunning {
+        newNode.activate()
+      }
 
     case .waitInCurrent:
 
@@ -195,7 +212,9 @@ public actor TaskManagerActor {
         head.endpoint().addNext(newNode)
       } else {
         self.queues[key] = newNode
-        newNode.activate()
+        if isRunning {
+          newNode.activate()
+        }
       }
 
     }
@@ -241,9 +260,12 @@ public actor TaskManagerActor {
     if let headNode = queues[key] {
 
       if let nextNode = headNode.next {
-        nextNode.activate()
         // drop headNode, set nextNode as head
         queues[key] = nextNode
+
+        if isRunning {
+          nextNode.activate()
+        }
       } else {
         if headNode === completedNode {
           queues.removeValue(forKey: key)
@@ -257,8 +279,14 @@ public actor TaskManagerActor {
 
   }
 
+  private func resume() {
+    for (_, element) in queues {
+      element.activate()
+    }
+  }
+
   // MARK: Private
   
   private var queues: [TaskKey : TaskNode] = [:]
-  
+
 }
