@@ -1,5 +1,9 @@
 import Foundation
 
+/**
+ structure of linked-list
+ it has a node for the next task after this node.
+ */
 final class TaskNode: CustomStringConvertible {
 
   struct WeakBox<T: AnyObject> {
@@ -8,6 +12,7 @@ final class TaskNode: CustomStringConvertible {
 
   private struct State {
 
+    var isActivated: Bool = false
     var isFinished: Bool = false
     var isInvalidated: Bool = false
 
@@ -32,8 +37,11 @@ final class TaskNode: CustomStringConvertible {
 
   /// Starts the deferred task
   func activate() {
+    guard state.isActivated == false else { return }
     guard state.isInvalidated == false else { return }
     guard anyTask == nil else { return }
+
+    state.isActivated = true
 
     Log.debug(.taskNode, "activate: \(label) <\(Unmanaged.passUnretained(self).toOpaque())>")
 

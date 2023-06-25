@@ -83,4 +83,35 @@ final class TaskManagerTests: XCTestCase {
 
     XCTAssertEqual(events.value, ["1", "2"])
   }
+
+  @MainActor
+  func test_isRunning() async {
+
+    let manager = TaskManagerActor()
+
+    var callCount = 0
+    var _isRunning = false
+    await manager.setIsRunning(false)
+
+    _ = await manager.task(key: .init("request"), mode: .waitInCurrent) {
+      print("done 1")
+      callCount += 1
+      XCTAssert(_isRunning == true)
+    }
+
+    _ = await manager.task(key: .init("request"), mode: .waitInCurrent) {
+      print("done 2")
+      callCount += 1
+      XCTAssert(_isRunning == true)
+    }
+
+    try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+    _isRunning = true
+    await manager.setIsRunning(true)
+
+    try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+    XCTAssertEqual(callCount, 2)
+  }
 }
