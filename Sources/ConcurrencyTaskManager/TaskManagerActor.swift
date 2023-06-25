@@ -238,13 +238,14 @@ public actor TaskManagerActor {
 
   private func loopback(key: TaskKey, completedNode: TaskNode) {
 
-    if let node = queues[key] {
+    if let headNode = queues[key] {
 
-      if let next = node.next {
-        next.activate()
-        queues[key] = next
+      if let nextNode = headNode.next {
+        nextNode.activate()
+        // drop headNode, set nextNode as head
+        queues[key] = nextNode
       } else {
-        if node === completedNode {
+        if headNode === completedNode {
           queues.removeValue(forKey: key)
         }
       }
