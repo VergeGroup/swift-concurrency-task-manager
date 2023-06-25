@@ -1,5 +1,9 @@
 import Foundation
 
+/**
+ structure of linked-list
+ it has a node for the next task after this node.
+ */
 final class TaskNode: CustomStringConvertible {
 
   struct WeakBox<T: AnyObject> {
