@@ -147,7 +147,7 @@ public actor TaskQueueActor {
 
     let referenceTask = Task { [weak extendedContinuation] in
       return try await withUnsafeThrowingContinuation{ (continuation: UnsafeContinuation<Return, Error>) in
-        extendedContinuation?.continuation = continuation
+        extendedContinuation?.setContinuation(continuation)
       }
     }
     
@@ -255,7 +255,7 @@ final class AutoReleaseContinuationBox<T>: @unchecked Sendable {
 
   private let lock = NSRecursiveLock()
 
-  var continuation: UnsafeContinuation<T, Error>?
+  private var continuation: UnsafeContinuation<T, Error>?
   private var wasConsumed: Bool = false
 
   init(_ value: UnsafeContinuation<T, Error>?) {
@@ -265,7 +265,16 @@ final class AutoReleaseContinuationBox<T>: @unchecked Sendable {
   deinit {
     resume(throwing: CancellationError())
   }
-  
+
+  func setContinuation(_ continuation: UnsafeContinuation<T, Error>?) {
+    lock.lock()
+    defer {
+      lock.unlock()
+    }
+
+    self.continuation = continuation
+  }
+
   func resume(throwing error: Error) {
     lock.lock()
     defer {

@@ -155,7 +155,7 @@ public actor TaskManagerActor {
 
     let referenceTask = Task { [weak extendedContinuation] in
       return try await withUnsafeThrowingContinuation{ (continuation: UnsafeContinuation<Return, Error>) in
-        extendedContinuation?.continuation = continuation
+        extendedContinuation?.setContinuation(continuation)
       }
     }
 
