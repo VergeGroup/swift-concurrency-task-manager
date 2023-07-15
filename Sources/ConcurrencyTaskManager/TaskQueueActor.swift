@@ -253,6 +253,8 @@ public actor TaskQueueActor {
 
 final class AutoReleaseContinuationBox<T>: @unchecked Sendable {
 
+  private let lock = NSRecursiveLock()
+
   var continuation: UnsafeContinuation<T, Error>?
   private var wasConsumed: Bool = false
 
@@ -265,6 +267,10 @@ final class AutoReleaseContinuationBox<T>: @unchecked Sendable {
   }
   
   func resume(throwing error: Error) {
+    lock.lock()
+    defer {
+      lock.unlock()
+    }
     guard wasConsumed == false else {
       return
     }
@@ -273,6 +279,10 @@ final class AutoReleaseContinuationBox<T>: @unchecked Sendable {
   }
   
   func resume(returning value: T) {
+    lock.lock()
+    defer {
+      lock.unlock()
+    }
     guard wasConsumed == false else {
       return
     }
