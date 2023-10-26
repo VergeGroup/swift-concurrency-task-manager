@@ -26,7 +26,7 @@ extension OSLog {
   
   @inline(__always)
   private static func makeOSLogInDebug(isEnabled: Bool = true, _ factory: () -> OSLog) -> OSLog {
-#if DEBUG
+#if false
     return factory()
 #else
     return .disabled
