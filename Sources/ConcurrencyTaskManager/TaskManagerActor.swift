@@ -233,11 +233,11 @@ public actor TaskManagerActor {
     task(label: label, key: key, mode: mode, priority: priority, action)
   }
 
-  public func batch(_ closure: (isolated TaskManagerActor) -> Void) {
+  public func batch(_ closure: sending @Sendable (isolated TaskManagerActor) -> Void) {
     closure(self)
   }
 
-  public func batch(_ closure: (isolated TaskManagerActor) async -> Void) async {
+  public func batch(_ closure: sending @Sendable (isolated TaskManagerActor) async -> Void) async {
     await closure(self)
   }
 

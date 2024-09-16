@@ -1,5 +1,6 @@
 import DequeModule
 import Foundation
+@preconcurrency import Combine
 
 public actor TaskStackActor {
 
@@ -105,7 +106,7 @@ public actor TaskStackActor {
         continuation.yield(state)
       }
 
-      continuation.onTermination = { _ in
+      continuation.onTermination = { _ in        
         cancellable.cancel()
       }
 
@@ -129,7 +130,9 @@ public actor TaskStackActor {
     state.update(waitingCount: stack.count, executingCount: currentExecutingTaskCount)
   }
 
-  private func processForCompletion(taskNode: TaskNode) {
+  private func processForCompletion(
+    taskNode: sending TaskNode
+  ) {
     executings.removeAll { $0 === taskNode }
   }
 
