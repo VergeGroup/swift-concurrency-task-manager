@@ -1,16 +1,17 @@
 import Foundation
+@preconcurrency import Combine
 
 /**
  structure of linked-list
  it has a node for the next task after this node.
  */
-final class TaskNode: CustomStringConvertible {
+final class TaskNode: CustomStringConvertible, @unchecked Sendable {
 
   struct WeakBox<T: AnyObject> {
     weak var value: T?
   }
 
-  private struct State {
+  private struct State: Sendable {
 
     var isActivated: Bool = false
     var isFinished: Bool = false
@@ -20,7 +21,7 @@ final class TaskNode: CustomStringConvertible {
 
   private var anyTask: _Verge_TaskType?
 
-  let taskFactory: (WeakBox<TaskNode>) async -> Void
+  let taskFactory: (sending WeakBox<TaskNode>) async -> Void
 
   private(set) var next: TaskNode?
   let label: String
@@ -29,7 +30,7 @@ final class TaskNode: CustomStringConvertible {
 
   init(
     label: String = "",
-    @_inheritActorContext taskFactory: @escaping @Sendable (WeakBox<TaskNode>) async -> Void
+    @_inheritActorContext taskFactory: @escaping @Sendable (sending WeakBox<TaskNode>) async -> Void
   ) {
     self.label = label
     self.taskFactory = taskFactory
@@ -179,18 +180,8 @@ public actor TaskQueueActor {
       }
       
       // connecting to the next if presents
-
-      await self?.batch {
-        guard let node = box.value else { return }
-        if let next = node.next {
-          $0.head = next
-          next.activate()
-        } else {
-          if $0.head === node {
-            $0.head = nil
-          }
-        }
-      }
+      
+      await self?.advance(box: box)
       
     }
 
@@ -240,13 +231,17 @@ public actor TaskQueueActor {
     }
     
   }
-
-  /**
-   Performs given closure in a critical session
-   */
-  @discardableResult
-  public func batch<Return>(_ perform: (isolated TaskQueueActor) -> Return) -> Return {
-    return perform(self)
+  
+  func advance(box: sending TaskNode.WeakBox<TaskNode>) {
+    guard let node = box.value else { return }
+    if let next = node.next {
+      self.head = next
+      next.activate()
+    } else {
+      if self.head === node {
+        self.head = nil
+      }
+    }
   }
 
 }
@@ -275,7 +270,7 @@ final class AutoReleaseContinuationBox<T>: @unchecked Sendable {
     self.continuation = continuation
   }
 
-  func resume(throwing error: Error) {
+  func resume(throwing error: sending Error) {
     lock.lock()
     defer {
       lock.unlock()
@@ -287,7 +282,7 @@ final class AutoReleaseContinuationBox<T>: @unchecked Sendable {
     continuation?.resume(throwing: error)
   }
   
-  func resume(returning value: T) {
+  func resume(returning value: sending T) {
     lock.lock()
     defer {
       lock.unlock()

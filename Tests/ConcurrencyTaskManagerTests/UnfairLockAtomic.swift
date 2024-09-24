@@ -1,6 +1,6 @@
 import os.atomic
 
-public final class UnfairLock: Sendable {
+public final class UnfairLock: @unchecked Sendable {
   private let _lock: os_unfair_lock_t
 
   public init() {
