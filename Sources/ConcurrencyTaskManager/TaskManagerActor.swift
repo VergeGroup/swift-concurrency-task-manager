@@ -69,6 +69,15 @@ public struct TaskKey: Hashable, Sendable, ExpressibleByStringLiteral {
   public static func distinct() -> Self {
     .init(UUID().uuidString)
   }
+  
+  /// Makes a key with the file, line, and column number.
+  public static func code(
+    _ file: StaticString =  #fileID,
+    _ line: UInt = #line,
+    _ column: UInt = #column    
+  ) -> Self {
+    .init(stringLiteral: "\(file):\(line):\(column)")
+  }
 
 }
 
