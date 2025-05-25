@@ -38,14 +38,17 @@ public struct TaskManagerActorWrapper: Sendable {
   
   @discardableResult
   public func task<Return>(
+    isRunning: Binding<Bool>? = nil,
     label: String = "",
     key: TaskKey,
     mode: TaskManagerActor.Mode,
     priority: TaskPriority = .userInitiated,
     @_inheritActorContext _ operation: @Sendable @escaping () async throws -> Return
   ) -> Task<Return, Error> {  
-    Task { [taskManager] in
-      try await taskManager
+    isRunning?.wrappedValue = true
+    return Task { [taskManager] in
+      
+      let result = try await taskManager
         .task(
           label: label,
           key: key,
@@ -54,6 +57,12 @@ public struct TaskManagerActorWrapper: Sendable {
           operation
         )
         .value
+      
+      Task { @MainActor in
+        isRunning?.wrappedValue = false
+      }
+      
+      return result
     }
   }
   
