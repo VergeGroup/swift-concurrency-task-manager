@@ -7,9 +7,9 @@ let package = Package(
   name: "swift-concurrency-task-manager",
   platforms: [
     .macOS(.v11),
-    .iOS(.v13),
-    .tvOS(.v13),
-    .watchOS(.v6)
+    .iOS(.v14),
+    .tvOS(.v16),
+    .watchOS(.v10)
   ],
   products: [
     // Products define the executables and libraries a package produces, making them visible to other packages.
