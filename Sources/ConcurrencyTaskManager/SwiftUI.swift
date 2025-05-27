@@ -11,6 +11,14 @@ public struct TaskManager: DynamicProperty {
     box.wrapper
   }
   
+  public var projectedValue: TaskManager {
+    self
+  }
+  
+  public init(projectedValue: TaskManager) {
+    self = projectedValue
+  }
+  
   public init() {
 
   }
