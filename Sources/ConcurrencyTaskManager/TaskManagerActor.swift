@@ -251,6 +251,18 @@ public actor TaskManagerActor {
   }
 
   /**
+   Cancels tasks for the specified key.
+   */
+  public func cancel(key: TaskKey) async {
+    if let head = queues[key] {
+      for node in sequence(first: head, next: \.next) {
+        node.invalidate()
+      }
+      queues.removeValue(forKey: key)
+    }
+  }
+
+  /**
    Cancells all tasks managed in this manager.
    */
   public func cancelAll() async {

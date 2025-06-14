@@ -114,4 +114,101 @@ final class TaskManagerTests: XCTestCase {
 
     XCTAssertEqual(callCount, 2)
   }
+
+  @MainActor
+  func test_cancel_specific_key() async {
+    let manager = TaskManagerActor()
+    
+    let events: UnfairLockAtomic<[String]> = .init([])
+    
+    // Start tasks with different keys
+    await manager.batch {
+      $0.task(key: .init("key1"), mode: .dropCurrent) {
+        await dummyTask("", nanoseconds: 1_000_000_000)
+        guard Task.isCancelled == false else { return }
+        events.modify { $0.append("key1") }
+      }
+      
+      $0.task(key: .init("key2"), mode: .dropCurrent) {
+        await dummyTask("", nanoseconds: 1_000_000_000)
+        guard Task.isCancelled == false else { return }
+        events.modify { $0.append("key2") }
+      }
+      
+      $0.task(key: .init("key3"), mode: .dropCurrent) {
+        await dummyTask("", nanoseconds: 1_000_000_000)
+        guard Task.isCancelled == false else { return }
+        events.modify { $0.append("key3") }
+      }
+    }
+    
+    // Give tasks time to start
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    
+    // Cancel only key2
+    await manager.cancel(key: .init("key2"))
+    
+    // Wait for remaining tasks to complete
+    try? await Task.sleep(nanoseconds: 2_000_000_000)
+    
+    // key1 and key3 should complete, key2 should be cancelled
+    XCTAssertEqual(Set(events.value), Set(["key1", "key3"]))
+  }
+  
+  @MainActor
+  func test_cancel_key_with_multiple_queued_tasks() async {
+    let manager = TaskManagerActor()
+    
+    let events: UnfairLockAtomic<[String]> = .init([])
+    
+    // Queue multiple tasks on the same key
+    await manager.batch {
+      $0.task(key: .init("queue"), mode: .waitInCurrent) {
+        await dummyTask("", nanoseconds: 500_000_000)
+        guard Task.isCancelled == false else { return }
+        events.modify { $0.append("task1") }
+      }
+      
+      $0.task(key: .init("queue"), mode: .waitInCurrent) {
+        await dummyTask("", nanoseconds: 500_000_000)
+        guard Task.isCancelled == false else { return }
+        events.modify { $0.append("task2") }
+      }
+      
+      $0.task(key: .init("queue"), mode: .waitInCurrent) {
+        await dummyTask("", nanoseconds: 500_000_000)
+        guard Task.isCancelled == false else { return }
+        events.modify { $0.append("task3") }
+      }
+    }
+    
+    // Give first task time to start
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    
+    // Cancel all tasks for this key
+    await manager.cancel(key: .init("queue"))
+    
+    // Wait to ensure no tasks complete
+    try? await Task.sleep(nanoseconds: 2_000_000_000)
+    
+    // No tasks should have completed
+    XCTAssertEqual(events.value, [])
+  }
+  
+  @MainActor
+  func test_cancel_nonexistent_key() async {
+    let manager = TaskManagerActor()
+    
+    // This should not crash
+    await manager.cancel(key: .init("nonexistent"))
+    
+    // Verify manager still works after cancelling nonexistent key
+    let expectation = XCTestExpectation(description: "Task completes")
+    
+    await manager.task(key: .init("test"), mode: .dropCurrent) {
+      expectation.fulfill()
+    }
+    
+    await fulfillment(of: [expectation], timeout: 1.0)
+  }
 }
