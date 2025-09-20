@@ -12,4 +12,4 @@ jobs:
           xcode-version: "26"
       - uses: actions/checkout@v2
       - name: Run Test
-        run: xcodebuild -scheme swift-concurrency-task-manager test -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26' | xcpretty
+        run: swift test
