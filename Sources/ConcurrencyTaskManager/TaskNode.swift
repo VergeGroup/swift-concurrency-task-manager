@@ -1,36 +1,49 @@
 import Foundation
-@preconcurrency import Combine
+import os.lock
 
 /**
  structure of linked-list
  it has a node for the next task after this node.
  */
-final class TaskNode: CustomStringConvertible, @unchecked Sendable {
+final class TaskNode: CustomStringConvertible, Sendable {
 
   struct WeakBox<T: AnyObject> {
     weak var value: T?
   }
 
-  private struct State: Sendable {
+  private struct State: OptionSet, Sendable {
+    let rawValue: UInt8
 
-    var isActivated: Bool = false
-    var isFinished: Bool = false
-    var isInvalidated: Bool = false
+    init(rawValue: UInt8) {
+      self.rawValue = rawValue
+    }
 
+    static let activated   = State(rawValue: 1 << 0)
+    static let finished    = State(rawValue: 1 << 1)
+    static let invalidated = State(rawValue: 1 << 2)
   }
 
-  private var anyTask: _Verge_TaskType?
+  nonisolated(unsafe)
+  private var anyTask: Task<Void, Error>?
 
-  let taskFactory: (sending WeakBox<TaskNode>) async -> Void
+  let taskFactory: @Sendable (WeakBox<TaskNode>) async -> Void
 
+  nonisolated(unsafe)
   private(set) var next: TaskNode?
+  
   let label: String
 
-  @Published private var state: State = .init()
+  nonisolated(unsafe)
+  private var state: State = []
+  
+  nonisolated(unsafe)
+  private var continuations: [CheckedContinuation<Void, Never>] = []
+  
+  private let lock = OSAllocatedUnfairLock()
 
   init(
     label: String = "",
-    @_inheritActorContext taskFactory: @escaping @Sendable (sending WeakBox<TaskNode>) async -> Void
+    @_inheritActorContext taskFactory: @escaping @Sendable (WeakBox<TaskNode>) async -> Void
   ) {
     self.label = label
     self.taskFactory = taskFactory
@@ -38,27 +51,49 @@ final class TaskNode: CustomStringConvertible, @unchecked Sendable {
 
   /// Starts the deferred task
   func activate() {
-    guard state.isActivated == false else { return }
-    guard state.isInvalidated == false else { return }
+    
+    lock.lock()
+    defer { lock.unlock() }
+    
+    guard state.contains(.activated) == false else { return }
+    guard state.contains(.invalidated) == false else { return }
     guard anyTask == nil else { return }
 
-    state.isActivated = true
+    state.insert(.activated)
 
     Log.debug(.taskNode, "activate: \(label) <\(Unmanaged.passUnretained(self).toOpaque())>")
 
-    self.anyTask = Task { [weak self] in
+    self.anyTask = Task<Void, Error> { [weak self] in
+      
       await self?.taskFactory(.init(value: self))
-      self?.state.isFinished = true
+      
+      guard let self = self else { return }
+      
+      self.state.insert(.finished)
+      for continuation in self.continuations {
+        continuation.resume()
+      }
     }
   }
 
   func invalidate() {
+    
+    lock.lock()
+    defer { lock.unlock() }
+    
     Log.debug(.taskNode, "invalidated \(label) <\(Unmanaged.passUnretained(self).toOpaque())>")
-    state.isInvalidated = true
+    self.state.insert(.invalidated)
+    for continuation in continuations {
+      continuation.resume()
+    }
     anyTask?.cancel()
   }
 
   func addNext(_ node: TaskNode) {
+    
+    lock.lock()
+    defer { lock.unlock() }
+    
     guard self.next == nil else {
       assertionFailure("next is already set.")
       return
@@ -67,29 +102,17 @@ final class TaskNode: CustomStringConvertible, @unchecked Sendable {
   }
 
   func endpoint() -> TaskNode {
-    sequence(first: self, next: \.next).compactMap { $0 }.last!
+    return sequence(first: self, next: \.next).compactMap { $0 }.last!
   }
 
   func wait() async {
-
-    let stream = AsyncStream<State> { continuation in
-
-      let cancellable = $state.sink { state in
-        continuation.yield(state)
-      }
-
-      continuation.onTermination = { _ in
-        cancellable.cancel()
-      }
-
+    
+    await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+      lock.lock()
+      defer { lock.unlock() }
+      continuations.append(c)
     }
-
-    for await state in stream {
-      if state.isInvalidated == true || state.isFinished == true {
-        break
-      }
-    }
-
+    
   }
 
   deinit {
