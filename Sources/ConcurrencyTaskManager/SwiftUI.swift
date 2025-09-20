@@ -1,21 +1,21 @@
 import SwiftUI
 
 @propertyWrapper
-public struct TaskManager: DynamicProperty {
+public struct LocalTask: DynamicProperty {
   
   @StateObject private var box: Box = .init(wrapper: .init(taskManager: .init()))
   
-  @MainActor 
-  @preconcurrency 
-  public var wrappedValue: TaskManagerActorWrapper {
+  @MainActor
+  @preconcurrency
+  public var wrappedValue: LocalTaskWrapper {
     box.wrapper
   }
   
-  public var projectedValue: TaskManager {
+  public var projectedValue: LocalTask {
     self
   }
   
-  public init(projectedValue: TaskManager) {
+  public init(projectedValue: LocalTask) {
     self = projectedValue
   }
   
@@ -24,9 +24,9 @@ public struct TaskManager: DynamicProperty {
   }
   
   private final class Box: ObservableObject {
-    let wrapper: TaskManagerActorWrapper
-    
-    init(wrapper: TaskManagerActorWrapper) {
+    let wrapper: LocalTaskWrapper
+
+    init(wrapper: LocalTaskWrapper) {
       self.wrapper = wrapper
     }
     
@@ -36,11 +36,11 @@ public struct TaskManager: DynamicProperty {
   }
 }
 
-public struct TaskManagerActorWrapper: Sendable {
+public struct LocalTaskWrapper: Sendable {
   
-  private let taskManager: TaskManagerActor
-  
-  public init(taskManager: TaskManagerActor) {
+  private let taskManager: TaskManager
+
+  public init(taskManager: TaskManager) {
     self.taskManager = taskManager
   }
   
@@ -49,7 +49,7 @@ public struct TaskManagerActorWrapper: Sendable {
     isRunning: Binding<Bool>? = nil,
     label: String = "",
     key: TaskKey,
-    mode: TaskManagerActor.Mode,
+    mode: TaskManager.Mode,
     priority: TaskPriority = .userInitiated,
     @_inheritActorContext _ operation: @Sendable @escaping () async throws -> Return
   ) -> Task<Return, Error> {  
@@ -87,7 +87,7 @@ public struct TaskManagerActorWrapper: Sendable {
 
 private struct _View: View {
   
-  @TaskManager var taskManager
+  @LocalTask var taskManager
     
   var body: some View {
     Button("Start") {

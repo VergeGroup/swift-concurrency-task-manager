@@ -5,7 +5,7 @@ import Testing
 
   @Test
   func simpleTask() async throws {
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let completed = UnfairLockAtomic<Bool>(false)
 
@@ -20,7 +20,7 @@ import Testing
 
   @Test
   func distinctTasks() async throws {
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events = UnfairLockAtomic<[String]>([])
 
@@ -45,7 +45,7 @@ import Testing
 
   @Test
   func cancelSpecificKey() async throws {
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events = UnfairLockAtomic<[String]>([])
 

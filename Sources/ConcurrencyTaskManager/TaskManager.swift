@@ -83,11 +83,11 @@ public struct TaskKey: Hashable, Sendable, ExpressibleByStringLiteral {
 }
 
 /**
- An class that manages tasks by specified keys.
+ A class that manages tasks by specified keys.
  It enqueues a given task into a separated queue by key.
  Consumers can specify how to handle the current task as dropping it or waiting for it.
  */
-public final class TaskManagerActor: @unchecked Sendable {
+public final class TaskManager: @unchecked Sendable {
 
   public struct Configuration {
 

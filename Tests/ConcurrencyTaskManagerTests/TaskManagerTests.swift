@@ -11,7 +11,7 @@ final class TaskManagerTests: XCTestCase {
 
   func test_run_distinct_tasks() async {
 
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
 
@@ -36,7 +36,7 @@ final class TaskManagerTests: XCTestCase {
 
   func test_drop_current_task_in_key() async {
 
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
 
@@ -56,7 +56,7 @@ final class TaskManagerTests: XCTestCase {
 
   func test_wait_current_task_in_key() async {
 
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
 
@@ -81,7 +81,7 @@ final class TaskManagerTests: XCTestCase {
 
   func test_isRunning() async {
 
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let callCount = UnfairLockAtomic<Int>(0)
     let _isRunning = UnfairLockAtomic<Bool>(false)
@@ -110,7 +110,7 @@ final class TaskManagerTests: XCTestCase {
   }
 
   func test_cancel_specific_key() async {
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
 
@@ -147,7 +147,7 @@ final class TaskManagerTests: XCTestCase {
   }
   
   func test_cancel_key_with_multiple_queued_tasks() async {
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
 
@@ -184,7 +184,7 @@ final class TaskManagerTests: XCTestCase {
   }
   
   func test_cancel_nonexistent_key() async {
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     // This should not crash
     manager.cancel(key: .init("nonexistent"))

@@ -4,7 +4,7 @@ import XCTest
 final class SimpleTest: XCTestCase {
 
   func test_simple_task() async {
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let completed = UnfairLockAtomic<Bool>(false)
 
