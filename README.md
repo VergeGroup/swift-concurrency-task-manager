@@ -137,7 +137,8 @@ struct UserProfileView: View {
             }
 
             Button("Refresh") {
-                taskManager.task(
+                // Using the SwiftUI extension for binding support
+                taskManager.taskWithBinding(
                     isRunning: $isLoading,
                     key: TaskKey("fetch-user"),
                     mode: .dropCurrent
@@ -327,11 +328,11 @@ Identifies and groups related tasks.
 
 #### @LocalTask Property Wrapper
 
-Provides TaskManager functionality in SwiftUI views with automatic lifecycle management.
+Provides TaskManager functionality in SwiftUI views with automatic lifecycle management. The property wrapper directly exposes a `TaskManager` instance that is automatically cleaned up when the view is deallocated.
 
-#### LocalTaskWrapper
+#### Extension Methods
 
-SwiftUI-friendly wrapper with `isRunning` binding support.
+TaskManager includes a SwiftUI-specific extension method `taskWithBinding` that provides `isRunning` binding support for tracking task execution state.
 
 ## 🤝 Contributing
 

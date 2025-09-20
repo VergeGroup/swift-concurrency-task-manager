@@ -2,84 +2,70 @@ import SwiftUI
 
 @propertyWrapper
 public struct LocalTask: DynamicProperty {
-  
-  @StateObject private var box: Box = .init(wrapper: .init(taskManager: .init()))
-  
+
+  @StateObject private var box: Box = .init()
+
   @MainActor
   @preconcurrency
-  public var wrappedValue: LocalTaskWrapper {
-    box.wrapper
+  public var wrappedValue: TaskManager {
+    box.taskManager
   }
-  
+
   public var projectedValue: LocalTask {
     self
   }
-  
+
   public init(projectedValue: LocalTask) {
     self = projectedValue
   }
-  
+
   public init() {
 
   }
-  
-  private final class Box: ObservableObject {
-    let wrapper: LocalTaskWrapper
 
-    init(wrapper: LocalTaskWrapper) {
-      self.wrapper = wrapper
-    }
-    
+  private final class Box: ObservableObject {
+    let taskManager = TaskManager()
+
     deinit {
-      wrapper.cancelAllTasks()
+      taskManager.cancelAll()
     }
   }
 }
 
-public struct LocalTaskWrapper: Sendable {
-  
-  private let taskManager: TaskManager
-
-  public init(taskManager: TaskManager) {
-    self.taskManager = taskManager
-  }
-  
+extension TaskManager {
+  /// SwiftUI-specific task method with isRunning binding support
   @discardableResult
-  public func task<Return>(
-    isRunning: Binding<Bool>? = nil,
+  public func taskWithBinding<Return>(
+    isRunning: Binding<Bool>,
     label: String = "",
     key: TaskKey,
-    mode: TaskManager.Mode,
+    mode: Mode,
     priority: TaskPriority = .userInitiated,
     @_inheritActorContext _ operation: @Sendable @escaping () async throws -> Return
-  ) -> Task<Return, Error> {  
-    isRunning?.wrappedValue = true
-    return Task { [taskManager] in
-      
-      let result = try await taskManager
-        .task(
-          label: label,
-          key: key,
-          mode: mode,
-          priority: priority,
-          operation
-        )
-        .value
-      
-      Task { @MainActor in
-        isRunning?.wrappedValue = false
-      }
-      
-      return result
-    }
-  }
-  
-  public func cancelTask(key: TaskKey) {
-    taskManager.cancel(key: key)
-  }
+  ) -> Task<Return, Error> where Return: Sendable {
+    isRunning.wrappedValue = true
+    let originalTask = self.task(
+      label: label,
+      key: key,
+      mode: mode,
+      priority: priority,
+      operation
+    )
 
-  public func cancelAllTasks() {
-    taskManager.cancelAll()
+    return Task {
+      do {
+        let result = try await originalTask.value
+        await MainActor.run {
+          isRunning.wrappedValue = false
+        }
+        return result
+      } catch {
+        await MainActor.run {
+          isRunning.wrappedValue = false
+        }
+        throw error
+      }
+    }
   }
 }
 
