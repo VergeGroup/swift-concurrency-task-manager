@@ -5,126 +5,129 @@ import os.lock
  structure of linked-list
  it has a node for the next task after this node.
  */
-final class TaskNode: CustomStringConvertible, Sendable {
+struct TaskNode: CustomStringConvertible, Sendable, Equatable {
 
-  struct WeakBox<T: AnyObject> {
-    weak var value: T?
-  }
-
-  private struct State: OptionSet, Sendable {
+  struct StateFlags: OptionSet, Sendable {
     let rawValue: UInt8
 
     init(rawValue: UInt8) {
       self.rawValue = rawValue
     }
 
-    static let activated   = State(rawValue: 1 << 0)
-    static let finished    = State(rawValue: 1 << 1)
-    static let invalidated = State(rawValue: 1 << 2)
+    static let activated   = StateFlags(rawValue: 1 << 0)
+    static let finished    = StateFlags(rawValue: 1 << 1)
+    static let invalidated = StateFlags(rawValue: 1 << 2)
   }
 
-  nonisolated(unsafe)
-  private var anyTask: Task<Void, Error>?
+  struct State: Sendable {
+    var flags: StateFlags = []
+    var anyTask: Task<Void, Error>?
+    var next: TaskNode?
+    var continuations: [CheckedContinuation<Void, Never>] = []
+  }
 
-  let taskFactory: @Sendable (WeakBox<TaskNode>) async -> Void
-
-  nonisolated(unsafe)
-  private(set) var next: TaskNode?
-  
+  let taskFactory: @Sendable (TaskNode) async -> Void
   let label: String
-
-  nonisolated(unsafe)
-  private var state: State = []
-  
-  nonisolated(unsafe)
-  private var continuations: [CheckedContinuation<Void, Never>] = []
-  
-  private let lock = OSAllocatedUnfairLock()
+  let id: UUID
+  let state: OSAllocatedUnfairLock<State>
 
   init(
     label: String = "",
-    @_inheritActorContext taskFactory: @escaping @Sendable (WeakBox<TaskNode>) async -> Void
+    @_inheritActorContext taskFactory: @escaping @Sendable @isolated(any) (TaskNode) async -> Void
   ) {
     self.label = label
+    self.id = UUID()
     self.taskFactory = taskFactory
+    self.state = OSAllocatedUnfairLock(initialState: State())
   }
 
   /// Starts the deferred task
   func activate() {
-    
-    lock.lock()
-    defer { lock.unlock() }
-    
-    guard state.contains(.activated) == false else { return }
-    guard state.contains(.invalidated) == false else { return }
-    guard anyTask == nil else { return }
+    state.withLock { state in
+      guard state.flags.contains(.activated) == false else { return }
+      guard state.flags.contains(.invalidated) == false else { return }
+      guard state.anyTask == nil else { return }
 
-    state.insert(.activated)
+      state.flags.insert(.activated)
 
-    Log.debug(.taskNode, "activate: \(label) <\(Unmanaged.passUnretained(self).toOpaque())>")
+      Log.debug(.taskNode, "activate: \(label) <\(self.id)>")
 
-    self.anyTask = Task<Void, Error> { [weak self] in
-      
-      await self?.taskFactory(.init(value: self))
-      
-      guard let self = self else { return }
-      
-      self.state.insert(.finished)
-      for continuation in self.continuations {
-        continuation.resume()
+      state.anyTask = Task<Void, Error> { [stateRef = self.state, taskFactory = self.taskFactory] in
+
+        await taskFactory(self)
+
+        stateRef.withLock { state in
+          state.flags.insert(.finished)
+          for continuation in state.continuations {
+            continuation.resume()
+          }
+          state.continuations.removeAll()
+        }
       }
     }
   }
 
   func invalidate() {
-    
-    lock.lock()
-    defer { lock.unlock() }
-    
-    Log.debug(.taskNode, "invalidated \(label) <\(Unmanaged.passUnretained(self).toOpaque())>")
-    self.state.insert(.invalidated)
-    for continuation in continuations {
-      continuation.resume()
+    state.withLock { state in
+      Log.debug(.taskNode, "invalidated \(label) <\(self.id)>")
+      state.flags.insert(.invalidated)
+      for continuation in state.continuations {
+        continuation.resume()
+      }
+      state.continuations.removeAll()
+      state.anyTask?.cancel()
     }
-    anyTask?.cancel()
   }
 
   func addNext(_ node: TaskNode) {
-    
-    lock.lock()
-    defer { lock.unlock() }
-    
-    guard self.next == nil else {
-      assertionFailure("next is already set.")
-      return
+    state.withLock { state in
+      guard state.next == nil else {
+        assertionFailure("next is already set.")
+        return
+      }
+      state.next = node
     }
-    self.next = node
   }
 
   func endpoint() -> TaskNode {
-    return sequence(first: self, next: \.next).compactMap { $0 }.last!
+    var current = self
+    while let next = current.state.withLock({ $0.next }) {
+      current = next
+    }
+    return current
   }
 
   func wait() async {
-    
     await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-      lock.lock()
-      defer { lock.unlock() }
-      continuations.append(c)
+      state.withLock { state in
+        if state.flags.contains(.finished) || state.flags.contains(.invalidated) {
+          c.resume()
+        } else {
+          state.continuations.append(c)
+        }
+      }
     }
-    
-  }
-
-  deinit {
-    Log.debug(.taskNode, "Deinit: \(label) <\(Unmanaged.passUnretained(self).toOpaque())>")
   }
 
   var description: String {
-    let chain = sequence(first: self, next: \.next).compactMap { $0 }.map {"<\(Unmanaged.passUnretained($0).toOpaque())>:\($0.label)" }.joined(separator: " -> ")
-    return "\(chain)"
+    var chain: [String] = []
+    var current: TaskNode? = self
+    while let node = current {
+      chain.append("<\(node.id)>:\(node.label)")
+      current = node.state.withLock { $0.next }
+    }
+    return chain.joined(separator: " -> ")
   }
 
   func forEach(_ closure: (TaskNode) -> Void) {
-    sequence(first: self, next: \.next).forEach(closure)
+    var current: TaskNode? = self
+    while let node = current {
+      closure(node)
+      current = node.state.withLock { $0.next }
+    }
+  }
+
+  static func == (lhs: TaskNode, rhs: TaskNode) -> Bool {
+    return lhs.id == rhs.id
   }
 }

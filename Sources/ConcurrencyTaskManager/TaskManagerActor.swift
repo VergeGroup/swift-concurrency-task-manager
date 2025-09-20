@@ -1,4 +1,5 @@
 import Foundation
+import os.lock
 
 public protocol TaskKeyType {
 
@@ -82,11 +83,11 @@ public struct TaskKey: Hashable, Sendable, ExpressibleByStringLiteral {
 }
 
 /**
- An actor that manages tasks by specified keys.
+ An class that manages tasks by specified keys.
  It enqueues a given task into a separated queue by key.
- Consumers can specify how to handle the current task as dropping it or waiting for it. 
+ Consumers can specify how to handle the current task as dropping it or waiting for it.
  */
-public actor TaskManagerActor {
+public final class TaskManagerActor: @unchecked Sendable {
 
   public struct Configuration {
 
@@ -94,7 +95,7 @@ public actor TaskManagerActor {
 
     }
   }
- 
+
   public enum Mode: Sendable {
     /**
      Cancels the current running task then start a new task.
@@ -106,10 +107,24 @@ public actor TaskManagerActor {
     case waitInCurrent
   }
 
-  public var isRunning: Bool = true {
-    didSet {
-      guard isRunning else { return }
-      resume()
+  private struct State: Sendable {
+    var isRunning: Bool = true
+    var queues: [TaskKey: TaskNode] = [:]
+  }
+
+  private let state: OSAllocatedUnfairLock<State>
+
+  public var isRunning: Bool {
+    get {
+      state.withLock { $0.isRunning }
+    }
+    set {
+      state.withLock { state in
+        state.isRunning = newValue
+        if newValue {
+          self.resume(state: &state)
+        }
+      }
     }
   }
 
@@ -125,6 +140,7 @@ public actor TaskManagerActor {
 
   public init(configuration: Configuration = .init()) {
     self.configuration = configuration
+    self.state = OSAllocatedUnfairLock(initialState: State())
   }
 
   deinit {
@@ -138,7 +154,7 @@ public actor TaskManagerActor {
    Returns a Boolean value that indicates whether the task for given key is currently running.
    */
   public func isRunning(for key: TaskKey) -> Bool {
-    return queues[key] != nil
+    return state.withLock { $0.queues[key] != nil }
   }
   
   /// Registers an asynchronous operation
@@ -157,7 +173,7 @@ public actor TaskManagerActor {
     key: TaskKey,
     mode: Mode,
     priority: TaskPriority = .userInitiated,
-    @_inheritActorContext _ operation: @Sendable @escaping () async throws -> Return
+    @_inheritActorContext _ operation: @Sendable @escaping @isolated(any) () async throws -> Return
   ) -> Task<Return, Error> {
 
     let extendedContinuation: AutoReleaseContinuationBox<Return> = .init(nil)
@@ -168,7 +184,7 @@ public actor TaskManagerActor {
       }
     }
 
-    let newNode = TaskNode(label: label) { [weak self] box in
+    let newNode = TaskNode(label: label) { [weak self] node in
 
       await withTaskCancellationHandler {
         do {
@@ -197,35 +213,40 @@ public actor TaskManagerActor {
 
       // connecting to the next if presents
 
-      guard let self = self, let node = box.value else { return }
-
-      await self.loopback(key: key, completedNode: node)
+      guard let self = self else { return }
+      
+      self.loopback(
+        key: key,
+        completedNode: node
+      )
 
     }
 
-    switch mode {
-    case .dropCurrent:
+    state.withLock { state in
+      switch mode {
+      case .dropCurrent:
 
-      self.queues[key]?.forEach {
-        $0.invalidate()
-      }
+        state.queues[key]?.forEach {
+          $0.invalidate()
+        }
 
-      self.queues[key] = newNode
-      if isRunning {
-        newNode.activate()
-      }
-
-    case .waitInCurrent:
-
-      if let head = self.queues[key] {
-        head.endpoint().addNext(newNode)
-      } else {
-        self.queues[key] = newNode
-        if isRunning {
+        state.queues[key] = newNode
+        if state.isRunning {
           newNode.activate()
         }
-      }
 
+      case .waitInCurrent:
+
+        if let head = state.queues[key] {
+          head.endpoint().addNext(newNode)
+        } else {
+          state.queues[key] = newNode
+          if state.isRunning {
+            newNode.activate()
+          }
+        }
+
+      }
     }
 
     return referenceTask
@@ -242,72 +263,64 @@ public actor TaskManagerActor {
     task(label: label, key: key, mode: mode, priority: priority, action)
   }
 
-  public func batch(_ closure: sending @Sendable (isolated TaskManagerActor) -> Void) {
-    closure(self)
-  }
-
-  public func batch(_ closure: sending @Sendable (isolated TaskManagerActor) async -> Void) async {
-    await closure(self)
-  }
-
   /**
    Cancels tasks for the specified key.
    */
-  public func cancel(key: TaskKey) async {
-    if let head = queues[key] {
-      for node in sequence(first: head, next: \.next) {
-        node.invalidate()
+  public func cancel(key: TaskKey) {
+    state.withLock { state in
+      if let head = state.queues[key] {
+        head.forEach { node in
+          node.invalidate()
+        }
+        state.queues.removeValue(forKey: key)
       }
-      queues.removeValue(forKey: key)
     }
   }
 
   /**
    Cancells all tasks managed in this manager.
    */
-  public func cancelAll() async {
-
-    for head in queues.values {
-      for node in sequence(first: head, next: \.next) {
-        node.invalidate()
+  public func cancelAll() {
+    state.withLock { state in
+      for head in state.queues.values {
+        head.forEach { node in
+          node.invalidate()
+        }
       }
-    }
 
-    queues.removeAll()
+      state.queues.removeAll()
+    }
   }
 
   private func loopback(key: TaskKey, completedNode: TaskNode) {
+    state.withLock { state in
+      if let headNode = state.queues[key] {
 
-    if let headNode = queues[key] {
+        let nextNode = headNode.state.withLock { $0.next }
+        if let nextNode = nextNode {
+          // drop headNode, set nextNode as head
+          state.queues[key] = nextNode
 
-      if let nextNode = headNode.next {
-        // drop headNode, set nextNode as head
-        queues[key] = nextNode
-
-        if isRunning {
-          nextNode.activate()
+          if state.isRunning {
+            nextNode.activate()
+          }
+        } else {
+          if headNode == completedNode {
+            state.queues.removeValue(forKey: key)
+          }
         }
       } else {
-        if headNode === completedNode {
-          queues.removeValue(forKey: key)
-        }
+        // there is no head node, do nothing
       }
-    } else {
-      assertionFailure()
+
+      Log.debug(.taskManager, state.queues)
     }
-
-    Log.debug(.taskManager, queues)
-
   }
 
-  private func resume() {
-    for (_, element) in queues {
+  private func resume(state: inout State) {
+    for (_, element) in state.queues {
       element.activate()
     }
   }
-
-  // MARK: Private
-  
-  private var queues: [TaskKey : TaskNode] = [:]
 
 }

@@ -75,15 +75,11 @@ public struct TaskManagerActorWrapper: Sendable {
   }
   
   public func cancelTask(key: TaskKey) {
-    Task {
-      await taskManager.cancel(key: key)
-    }
+    taskManager.cancel(key: key)
   }
-  
+
   public func cancelAllTasks() {
-    Task {
-      await taskManager.cancelAll()
-    }
+    taskManager.cancelAll()
   }
 }
 
