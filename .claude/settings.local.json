@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__swiftlens__swift_get_symbols_overview",
+      "Bash(git commit:*)",
+      "Bash(git mv:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,88 +1,33 @@
 import SwiftUI
 
 @propertyWrapper
-public struct TaskManager: DynamicProperty {
-  
-  @StateObject private var box: Box = .init(wrapper: .init(taskManager: .init()))
-  
-  @MainActor 
-  @preconcurrency 
-  public var wrappedValue: TaskManagerActorWrapper {
-    box.wrapper
+public struct LocalTask: DynamicProperty {
+
+  @StateObject private var box: Box = .init()
+
+  @MainActor
+  @preconcurrency
+  public var wrappedValue: TaskManager {
+    box.taskManager
   }
-  
-  public var projectedValue: TaskManager {
+
+  public var projectedValue: LocalTask {
     self
   }
-  
-  public init(projectedValue: TaskManager) {
+
+  public init(projectedValue: LocalTask) {
     self = projectedValue
   }
-  
+
   public init() {
 
   }
-  
-  private final class Box: ObservableObject {
-    let wrapper: TaskManagerActorWrapper
-    
-    init(wrapper: TaskManagerActorWrapper) {
-      self.wrapper = wrapper
-    }
-    
-    deinit {
-      wrapper.cancelAllTasks()
-    }
-  }
-}
 
-public struct TaskManagerActorWrapper: Sendable {
-  
-  private let taskManager: TaskManagerActor
-  
-  public init(taskManager: TaskManagerActor) {
-    self.taskManager = taskManager
-  }
-  
-  @discardableResult
-  public func task<Return>(
-    isRunning: Binding<Bool>? = nil,
-    label: String = "",
-    key: TaskKey,
-    mode: TaskManagerActor.Mode,
-    priority: TaskPriority = .userInitiated,
-    @_inheritActorContext _ operation: @Sendable @escaping () async throws -> Return
-  ) -> Task<Return, Error> {  
-    isRunning?.wrappedValue = true
-    return Task { [taskManager] in
-      
-      let result = try await taskManager
-        .task(
-          label: label,
-          key: key,
-          mode: mode,
-          priority: priority,
-          operation
-        )
-        .value
-      
-      Task { @MainActor in
-        isRunning?.wrappedValue = false
-      }
-      
-      return result
-    }
-  }
-  
-  public func cancelTask(key: TaskKey) {
-    Task {
-      await taskManager.cancel(key: key)
-    }
-  }
-  
-  public func cancelAllTasks() {
-    Task {
-      await taskManager.cancelAll()
+  private final class Box: ObservableObject {
+    let taskManager = TaskManager()
+
+    deinit {
+      taskManager.cancelAll()
     }
   }
 }
@@ -91,7 +36,7 @@ public struct TaskManagerActorWrapper: Sendable {
 
 private struct _View: View {
   
-  @TaskManager var taskManager
+  @LocalTask var taskManager
     
   var body: some View {
     Button("Start") {

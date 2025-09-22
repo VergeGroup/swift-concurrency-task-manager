@@ -1,5 +1,5 @@
 import ConcurrencyTaskManager
-import XCTest
+import Testing
 
 @discardableResult
 func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
@@ -7,46 +7,42 @@ func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
   return v
 }
 
-final class TaskManagerTests: XCTestCase {
+@Suite struct TaskManagerTests {
 
-  @MainActor
-  func test_run_distinct_tasks() async {
+  @Test func runDistinctTasks() async {
 
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
 
-    await manager.batch {
-      $0.task(key: .distinct(), mode: .dropCurrent) {
-        await dummyTask("", nanoseconds: 1)
-        events.modify { $0.append("1") }
-      }
-      $0.task(key: .distinct(), mode: .dropCurrent) {
-        await dummyTask("", nanoseconds: 1)
-        events.modify { $0.append("2") }
-      }
-      $0.task(key: .distinct(), mode: .dropCurrent) {
-        await dummyTask("", nanoseconds: 1)
-        events.modify { $0.append("3") }
-      }
+    manager.task(key: .distinct(), mode: .dropCurrent) {
+      await dummyTask("", nanoseconds: 1)
+      events.modify { $0.append("1") }
+    }
+    manager.task(key: .distinct(), mode: .dropCurrent) {
+      await dummyTask("", nanoseconds: 1)
+      events.modify { $0.append("2") }
+    }
+    manager.task(key: .distinct(), mode: .dropCurrent) {
+      await dummyTask("", nanoseconds: 1)
+      events.modify { $0.append("3") }
     }
 
     try? await Task.sleep(nanoseconds: 1_000_000)
 
-    XCTAssertEqual(Set(events.value), Set(["1", "2", "3"]))
+    #expect(Set(events.value) == Set(["1", "2", "3"]))
 
   }
 
-  @MainActor
-  func test_drop_current_task_in_key() async {
+  @Test func dropCurrentTaskInKey() async {
 
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
 
     for i in (0..<10) {
       try? await Task.sleep(nanoseconds: 100_000_000)
-      await manager.task(key: .init("request"), mode: .dropCurrent) {
+      manager.task(key: .init("request"), mode: .dropCurrent) {
         await dummyTask("", nanoseconds: 1_000_000_000)
         guard Task.isCancelled == false else { return }
         events.modify { $0.append("\(i)") }
@@ -55,17 +51,16 @@ final class TaskManagerTests: XCTestCase {
 
     try? await Task.sleep(nanoseconds: 2_000_000_000)
 
-    XCTAssertEqual(events.value, ["9"])
+    #expect(events.value == ["9"])
   }
 
-  @MainActor
-  func test_wait_current_task_in_key() async {
+  @Test func waitCurrentTaskInKey() async {
 
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
 
-    await manager.task(key: .init("request"), mode: .dropCurrent) {
+    manager.task(key: .init("request"), mode: .dropCurrent) {
       await dummyTask("", nanoseconds: 5_000_000)
       guard Task.isCancelled == false else { return }
       events.modify { $0.append("1") }
@@ -73,7 +68,7 @@ final class TaskManagerTests: XCTestCase {
 
     try? await Task.sleep(nanoseconds: 1_000)
 
-    await manager.task(key: .init("request"), mode: .waitInCurrent) {
+    manager.task(key: .init("request"), mode: .waitInCurrent) {
       await dummyTask("", nanoseconds: 5_000_000)
       guard Task.isCancelled == false else { return }
       events.modify { $0.append("2") }
@@ -81,134 +76,128 @@ final class TaskManagerTests: XCTestCase {
 
     try? await Task.sleep(nanoseconds: 1_000_000_000)
 
-    XCTAssertEqual(events.value, ["1", "2"])
+    #expect(events.value == ["1", "2"])
   }
 
-  @MainActor
-  func test_isRunning() async {
+  @Test func isRunning() async {
 
-    let manager = TaskManagerActor()
+    let manager = TaskManager()
 
-    var callCount = 0
-    var _isRunning = false
-    await manager.setIsRunning(false)
+    let callCount = UnfairLockAtomic<Int>(0)
+    let _isRunning = UnfairLockAtomic<Bool>(false)
+    manager.setIsRunning(false)
 
-    _ = await manager.task(key: .init("request"), mode: .waitInCurrent) {
+    _ = manager.task(key: .init("request"), mode: .waitInCurrent) {
       print("done 1")
-      callCount += 1
-      XCTAssert(_isRunning == true)
+      callCount.modify { $0 += 1 }
+      #expect(_isRunning.value == true)
     }
 
-    _ = await manager.task(key: .init("request"), mode: .waitInCurrent) {
+    _ = manager.task(key: .init("request"), mode: .waitInCurrent) {
       print("done 2")
-      callCount += 1
-      XCTAssert(_isRunning == true)
+      callCount.modify { $0 += 1 }
+      #expect(_isRunning.value == true)
     }
 
     try? await Task.sleep(nanoseconds: 1_000_000_000)
 
-    _isRunning = true
-    await manager.setIsRunning(true)
+    _isRunning.modify { $0 = true }
+    manager.setIsRunning(true)
 
     try? await Task.sleep(nanoseconds: 1_000_000_000)
 
-    XCTAssertEqual(callCount, 2)
+    #expect(callCount.value == 2)
   }
 
-  @MainActor
-  func test_cancel_specific_key() async {
-    let manager = TaskManagerActor()
-    
+  @Test func cancelSpecificKey() async {
+    let manager = TaskManager()
+
     let events: UnfairLockAtomic<[String]> = .init([])
-    
+
     // Start tasks with different keys
-    await manager.batch {
-      $0.task(key: .init("key1"), mode: .dropCurrent) {
-        await dummyTask("", nanoseconds: 1_000_000_000)
-        guard Task.isCancelled == false else { return }
-        events.modify { $0.append("key1") }
-      }
-      
-      $0.task(key: .init("key2"), mode: .dropCurrent) {
-        await dummyTask("", nanoseconds: 1_000_000_000)
-        guard Task.isCancelled == false else { return }
-        events.modify { $0.append("key2") }
-      }
-      
-      $0.task(key: .init("key3"), mode: .dropCurrent) {
-        await dummyTask("", nanoseconds: 1_000_000_000)
-        guard Task.isCancelled == false else { return }
-        events.modify { $0.append("key3") }
-      }
+    manager.task(key: .init("key1"), mode: .dropCurrent) {
+      await dummyTask("", nanoseconds: 1_000_000_000)
+      guard Task.isCancelled == false else { return }
+      events.modify { $0.append("key1") }
     }
-    
+
+    manager.task(key: .init("key2"), mode: .dropCurrent) {
+      await dummyTask("", nanoseconds: 1_000_000_000)
+      guard Task.isCancelled == false else { return }
+      events.modify { $0.append("key2") }
+    }
+
+    manager.task(key: .init("key3"), mode: .dropCurrent) {
+      await dummyTask("", nanoseconds: 1_000_000_000)
+      guard Task.isCancelled == false else { return }
+      events.modify { $0.append("key3") }
+    }
+
     // Give tasks time to start
     try? await Task.sleep(nanoseconds: 100_000_000)
-    
+
     // Cancel only key2
-    await manager.cancel(key: .init("key2"))
-    
+    manager.cancel(key: .init("key2"))
+
     // Wait for remaining tasks to complete
     try? await Task.sleep(nanoseconds: 2_000_000_000)
-    
+
     // key1 and key3 should complete, key2 should be cancelled
-    XCTAssertEqual(Set(events.value), Set(["key1", "key3"]))
+    #expect(Set(events.value) == Set(["key1", "key3"]))
   }
   
-  @MainActor
-  func test_cancel_key_with_multiple_queued_tasks() async {
-    let manager = TaskManagerActor()
-    
+  @Test func cancelKeyWithMultipleQueuedTasks() async {
+    let manager = TaskManager()
+
     let events: UnfairLockAtomic<[String]> = .init([])
-    
+
     // Queue multiple tasks on the same key
-    await manager.batch {
-      $0.task(key: .init("queue"), mode: .waitInCurrent) {
-        await dummyTask("", nanoseconds: 500_000_000)
-        guard Task.isCancelled == false else { return }
-        events.modify { $0.append("task1") }
-      }
-      
-      $0.task(key: .init("queue"), mode: .waitInCurrent) {
-        await dummyTask("", nanoseconds: 500_000_000)
-        guard Task.isCancelled == false else { return }
-        events.modify { $0.append("task2") }
-      }
-      
-      $0.task(key: .init("queue"), mode: .waitInCurrent) {
-        await dummyTask("", nanoseconds: 500_000_000)
-        guard Task.isCancelled == false else { return }
-        events.modify { $0.append("task3") }
-      }
+    manager.task(key: .init("queue"), mode: .waitInCurrent) {
+      await dummyTask("", nanoseconds: 500_000_000)
+      guard Task.isCancelled == false else { return }
+      events.modify { $0.append("task1") }
     }
-    
+
+    manager.task(key: .init("queue"), mode: .waitInCurrent) {
+      await dummyTask("", nanoseconds: 500_000_000)
+      guard Task.isCancelled == false else { return }
+      events.modify { $0.append("task2") }
+    }
+
+    manager.task(key: .init("queue"), mode: .waitInCurrent) {
+      await dummyTask("", nanoseconds: 500_000_000)
+      guard Task.isCancelled == false else { return }
+      events.modify { $0.append("task3") }
+    }
+
     // Give first task time to start
     try? await Task.sleep(nanoseconds: 100_000_000)
-    
+
     // Cancel all tasks for this key
-    await manager.cancel(key: .init("queue"))
-    
+    manager.cancel(key: .init("queue"))
+
     // Wait to ensure no tasks complete
     try? await Task.sleep(nanoseconds: 2_000_000_000)
-    
+
     // No tasks should have completed
-    XCTAssertEqual(events.value, [])
+    #expect(events.value == [])
   }
   
-  @MainActor
-  func test_cancel_nonexistent_key() async {
-    let manager = TaskManagerActor()
-    
+  @Test func cancelNonexistentKey() async {
+    let manager = TaskManager()
+
     // This should not crash
-    await manager.cancel(key: .init("nonexistent"))
-    
+    manager.cancel(key: .init("nonexistent"))
+
     // Verify manager still works after cancelling nonexistent key
-    let expectation = XCTestExpectation(description: "Task completes")
-    
-    await manager.task(key: .init("test"), mode: .dropCurrent) {
-      expectation.fulfill()
+    let completed = UnfairLockAtomic<Bool>(false)
+
+    manager.task(key: .init("test"), mode: .dropCurrent) {
+      completed.modify { $0 = true }
     }
-    
-    await fulfillment(of: [expectation], timeout: 1.0)
+
+    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+
+    #expect(completed.value)
   }
 }

@@ -6,8 +6,8 @@ import PackageDescription
 let package = Package(
   name: "swift-concurrency-task-manager",
   platforms: [
-    .macOS(.v11),
-    .iOS(.v14),
+    .macOS(.v13),
+    .iOS(.v16),
     .tvOS(.v16),
     .watchOS(.v10)
   ],
@@ -35,5 +35,5 @@ let package = Package(
       dependencies: ["ConcurrencyTaskManager"]
     ),
   ],
-  swiftLanguageModes: [.v5, .v6]
+  swiftLanguageModes: [.v6]
 )

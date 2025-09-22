@@ -14,7 +14,7 @@ TaskManager solves this by providing:
 - **Task isolation by key** - Group related operations together
 - **Execution control** - Choose whether to cancel existing tasks or queue new ones
 - **SwiftUI integration** - First-class support for UI-driven async operations
-- **Actor-based safety** - Thread-safe by design using Swift actors
+- **Thread-safe design** - Built with manual synchronization for optimal performance
 
 ## 🚀 Installation
 
@@ -79,10 +79,10 @@ Tasks are isolated by their keys, meaning operations with different keys run con
 ### Simple Task Management
 
 ```swift
-let manager = TaskManagerActor()
+let manager = TaskManager()
 
 // Drop any existing user fetch and start a new one
-let task = await manager.task(
+let task = manager.task(
     key: TaskKey("user-fetch"),
     mode: .dropCurrent
 ) {
@@ -98,17 +98,17 @@ let user = try await task.value
 
 ```swift
 class SearchViewModel {
-    let taskManager = TaskManagerActor()
-    
-    func search(query: String) async {
+    let taskManager = TaskManager()
+
+    func search(query: String) {
         // Cancel previous search when user types
-        await taskManager.task(
+        taskManager.task(
             key: TaskKey("search"),
             mode: .dropCurrent
         ) {
             // Debounce
             try await Task.sleep(for: .milliseconds(300))
-            
+
             let results = try await api.search(query)
             await MainActor.run {
                 self.searchResults = results
@@ -124,10 +124,10 @@ TaskManager provides a property wrapper for seamless SwiftUI integration:
 
 ```swift
 struct UserProfileView: View {
-    @TaskManager var taskManager
+    @LocalTask var taskManager
     @State private var isLoading = false
     @State private var user: User?
-    
+
     var body: some View {
         VStack {
             if isLoading {
@@ -135,9 +135,10 @@ struct UserProfileView: View {
             } else if let user {
                 Text(user.name)
             }
-            
+
             Button("Refresh") {
-                taskManager.task(
+                // Using the SwiftUI extension for binding support
+                taskManager.taskWithBinding(
                     isRunning: $isLoading,
                     key: TaskKey("fetch-user"),
                     mode: .dropCurrent
@@ -158,44 +159,42 @@ Create sophisticated task isolation strategies:
 
 ```swift
 // Isolate tasks per user
-func updateUserStatus(userID: String, isFavorite: Bool) async {
+func updateUserStatus(userID: String, isFavorite: Bool) {
     let key = TaskKey(UserOperations.self).combined(userID)
-    
-    await taskManager.task(key: key, mode: .dropCurrent) {
+
+    taskManager.task(key: key, mode: .dropCurrent) {
         try await api.updateUserStatus(userID, favorite: isFavorite)
     }
 }
 
 // Isolate tasks per resource and operation
-func downloadImage(url: URL, size: ImageSize) async {
+func downloadImage(url: URL, size: ImageSize) {
     let key = TaskKey("image-download")
         .combined(url.absoluteString)
         .combined(size.rawValue)
-    
-    await taskManager.task(key: key, mode: .waitInCurrent) {
+
+    taskManager.task(key: key, mode: .waitInCurrent) {
         try await imageLoader.download(url, size: size)
     }
 }
 ```
 
-### Batch Operations
+### Concurrent Operations
 
-Execute multiple operations efficiently:
+Execute multiple operations concurrently:
 
 ```swift
-await taskManager.batch { manager in
-    // These run concurrently (different keys)
-    manager.task(key: TaskKey("fetch-user"), mode: .dropCurrent) {
-        userData = try await api.fetchUser()
-    }
-    
-    manager.task(key: TaskKey("fetch-posts"), mode: .dropCurrent) {
-        posts = try await api.fetchPosts()
-    }
-    
-    manager.task(key: TaskKey("fetch-settings"), mode: .dropCurrent) {
-        settings = try await api.fetchSettings()
-    }
+// Tasks with different keys run concurrently
+taskManager.task(key: TaskKey("fetch-user"), mode: .dropCurrent) {
+    userData = try await api.fetchUser()
+}
+
+taskManager.task(key: TaskKey("fetch-posts"), mode: .dropCurrent) {
+    posts = try await api.fetchPosts()
+}
+
+taskManager.task(key: TaskKey("fetch-settings"), mode: .dropCurrent) {
+    settings = try await api.fetchSettings()
 }
 ```
 
@@ -204,21 +203,21 @@ await taskManager.batch { manager in
 Control task execution flow:
 
 ```swift
-let manager = TaskManagerActor()
+let manager = TaskManager()
 
 // Pause all task execution
-await manager.setIsRunning(false)
+manager.setIsRunning(false)
 
 // Tasks will queue but not execute
-await manager.task(key: TaskKey("operation"), mode: .waitInCurrent) {
+manager.task(key: TaskKey("operation"), mode: .waitInCurrent) {
     // This won't run until isRunning is true
 }
 
 // Resume execution
-await manager.setIsRunning(true)
+manager.setIsRunning(true)
 
 // Check if a specific task is running
-let isRunning = await manager.isRunning(for: TaskKey("operation"))
+let isRunning = manager.isRunning(for: TaskKey("operation"))
 ```
 
 ### Error Handling
@@ -246,18 +245,18 @@ do {
 
 ```swift
 class UserRepository {
-    private let taskManager = TaskManagerActor()
-    
+    private let taskManager = TaskManager()
+
     func fetchUser(id: String, forceRefresh: Bool = false) async throws -> User {
         let key = TaskKey(UserOperations.self).combined(id)
-        let mode: TaskManagerActor.Mode = forceRefresh ? .dropCurrent : .waitInCurrent
-        
+        let mode: TaskManager.Mode = forceRefresh ? .dropCurrent : .waitInCurrent
+
         return try await taskManager.task(key: key, mode: mode) {
             // Check cache first
             if !forceRefresh, let cached = await cache.get(id) {
                 return cached
             }
-            
+
             // Fetch from network
             let user = try await api.fetchUser(id)
             await cache.set(user, for: id)
@@ -272,23 +271,21 @@ class UserRepository {
 ```swift
 @Observable
 class ProductListViewModel {
-    private let taskManager = TaskManagerActor()
+    private let taskManager = TaskManager()
     var products: [Product] = []
     var isLoading = false
-    
+
     func loadProducts(category: String? = nil) {
-        Task {
-            await taskManager.task(
-                key: TaskKey("load-products").combined(category ?? "all"),
-                mode: .dropCurrent
-            ) {
-                await MainActor.run { self.isLoading = true }
-                defer { Task { @MainActor in self.isLoading = false } }
-                
-                let products = try await api.fetchProducts(category: category)
-                await MainActor.run {
-                    self.products = products
-                }
+        taskManager.task(
+            key: TaskKey("load-products").combined(category ?? "all"),
+            mode: .dropCurrent
+        ) {
+            await MainActor.run { self.isLoading = true }
+            defer { Task { @MainActor in self.isLoading = false } }
+
+            let products = try await api.fetchProducts(category: category)
+            await MainActor.run {
+                self.products = products
             }
         }
     }
@@ -297,17 +294,17 @@ class ProductListViewModel {
 
 ## 📚 API Reference
 
-### TaskManagerActor
+### TaskManager
 
-The main actor that manages task execution.
+The main class that manages task execution with thread-safe operations.
 
 #### Methods
 
 - `task(label:key:mode:priority:operation:)` - Submit a task for execution
 - `taskDetached(label:key:mode:priority:operation:)` - Submit a detached task
-- `batch(_:)` - Execute multiple operations in a batch
 - `setIsRunning(_:)` - Control task execution state
 - `isRunning(for:)` - Check if a task is running for a given key
+- `cancel(key:)` - Cancel tasks for a specific key
 - `cancelAll()` - Cancel all managed tasks
 
 ### TaskKey
@@ -329,13 +326,13 @@ Identifies and groups related tasks.
 
 ### SwiftUI Components
 
-#### @TaskManager Property Wrapper
+#### @LocalTask Property Wrapper
 
-Provides TaskManager functionality in SwiftUI views with automatic lifecycle management.
+Provides TaskManager functionality in SwiftUI views with automatic lifecycle management. The property wrapper directly exposes a `TaskManager` instance that is automatically cleaned up when the view is deallocated.
 
-#### TaskManagerActorWrapper
+#### Extension Methods
 
-SwiftUI-friendly wrapper with `isRunning` binding support.
+TaskManager includes a SwiftUI-specific extension method `taskWithBinding` that provides `isRunning` binding support for tracking task execution state.
 
 ## 🤝 Contributing
 
