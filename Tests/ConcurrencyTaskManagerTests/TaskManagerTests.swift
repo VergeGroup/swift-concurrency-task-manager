@@ -1,5 +1,5 @@
 import ConcurrencyTaskManager
-import XCTest
+import Testing
 
 @discardableResult
 func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
@@ -7,9 +7,9 @@ func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
   return v
 }
 
-final class TaskManagerTests: XCTestCase {
+@Suite struct TaskManagerTests {
 
-  func test_run_distinct_tasks() async {
+  @Test func runDistinctTasks() async {
 
     let manager = TaskManager()
 
@@ -30,11 +30,11 @@ final class TaskManagerTests: XCTestCase {
 
     try? await Task.sleep(nanoseconds: 1_000_000)
 
-    XCTAssertEqual(Set(events.value), Set(["1", "2", "3"]))
+    #expect(Set(events.value) == Set(["1", "2", "3"]))
 
   }
 
-  func test_drop_current_task_in_key() async {
+  @Test func dropCurrentTaskInKey() async {
 
     let manager = TaskManager()
 
@@ -51,10 +51,10 @@ final class TaskManagerTests: XCTestCase {
 
     try? await Task.sleep(nanoseconds: 2_000_000_000)
 
-    XCTAssertEqual(events.value, ["9"])
+    #expect(events.value == ["9"])
   }
 
-  func test_wait_current_task_in_key() async {
+  @Test func waitCurrentTaskInKey() async {
 
     let manager = TaskManager()
 
@@ -76,10 +76,10 @@ final class TaskManagerTests: XCTestCase {
 
     try? await Task.sleep(nanoseconds: 1_000_000_000)
 
-    XCTAssertEqual(events.value, ["1", "2"])
+    #expect(events.value == ["1", "2"])
   }
 
-  func test_isRunning() async {
+  @Test func isRunning() async {
 
     let manager = TaskManager()
 
@@ -90,13 +90,13 @@ final class TaskManagerTests: XCTestCase {
     _ = manager.task(key: .init("request"), mode: .waitInCurrent) {
       print("done 1")
       callCount.modify { $0 += 1 }
-      XCTAssert(_isRunning.value == true)
+      #expect(_isRunning.value == true)
     }
 
     _ = manager.task(key: .init("request"), mode: .waitInCurrent) {
       print("done 2")
       callCount.modify { $0 += 1 }
-      XCTAssert(_isRunning.value == true)
+      #expect(_isRunning.value == true)
     }
 
     try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -106,10 +106,10 @@ final class TaskManagerTests: XCTestCase {
 
     try? await Task.sleep(nanoseconds: 1_000_000_000)
 
-    XCTAssertEqual(callCount.value, 2)
+    #expect(callCount.value == 2)
   }
 
-  func test_cancel_specific_key() async {
+  @Test func cancelSpecificKey() async {
     let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
@@ -143,10 +143,10 @@ final class TaskManagerTests: XCTestCase {
     try? await Task.sleep(nanoseconds: 2_000_000_000)
 
     // key1 and key3 should complete, key2 should be cancelled
-    XCTAssertEqual(Set(events.value), Set(["key1", "key3"]))
+    #expect(Set(events.value) == Set(["key1", "key3"]))
   }
   
-  func test_cancel_key_with_multiple_queued_tasks() async {
+  @Test func cancelKeyWithMultipleQueuedTasks() async {
     let manager = TaskManager()
 
     let events: UnfairLockAtomic<[String]> = .init([])
@@ -180,22 +180,24 @@ final class TaskManagerTests: XCTestCase {
     try? await Task.sleep(nanoseconds: 2_000_000_000)
 
     // No tasks should have completed
-    XCTAssertEqual(events.value, [])
+    #expect(events.value == [])
   }
   
-  func test_cancel_nonexistent_key() async {
+  @Test func cancelNonexistentKey() async {
     let manager = TaskManager()
 
     // This should not crash
     manager.cancel(key: .init("nonexistent"))
 
     // Verify manager still works after cancelling nonexistent key
-    let expectation = XCTestExpectation(description: "Task completes")
+    let completed = UnfairLockAtomic<Bool>(false)
 
     manager.task(key: .init("test"), mode: .dropCurrent) {
-      expectation.fulfill()
+      completed.modify { $0 = true }
     }
 
-    await fulfillment(of: [expectation], timeout: 1.0)
+    try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+
+    #expect(completed.value)
   }
 }

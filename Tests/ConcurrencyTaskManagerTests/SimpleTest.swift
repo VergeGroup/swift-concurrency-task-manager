@@ -1,9 +1,9 @@
 import ConcurrencyTaskManager
-import XCTest
+import Testing
 
-final class SimpleTest: XCTestCase {
+@Suite struct SimpleTest {
 
-  func test_simple_task() async {
+  @Test func simpleTask() async {
     let manager = TaskManager()
 
     let completed = UnfairLockAtomic<Bool>(false)
@@ -14,6 +14,6 @@ final class SimpleTest: XCTestCase {
 
     _ = try? await task.value
 
-    XCTAssertTrue(completed.value)
+    #expect(completed.value)
   }
 }

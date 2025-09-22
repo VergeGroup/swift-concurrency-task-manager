@@ -1,10 +1,11 @@
 import ConcurrencyTaskManager
-import XCTest
+import Testing
+import Foundation
 
 /// Tests for TaskNode wait functionality via TaskManager
-final class TaskWaitTests: XCTestCase {
+@Suite struct TaskWaitTests {
 
-  func test_wait_for_queued_tasks() async throws {
+  @Test func waitForQueuedTasks() async throws {
     let manager = TaskManager()
     let events = UnfairLockAtomic<[String]>([])
 
@@ -30,10 +31,10 @@ final class TaskWaitTests: XCTestCase {
     _ = try await task3.value
 
     // Tasks should execute in order
-    XCTAssertEqual(events.value, ["task1", "task2", "task3"])
+    #expect(events.value == ["task1", "task2", "task3"])
   }
 
-  func test_drop_mode_cancels_previous_tasks() async throws {
+  @Test func dropModeCancelsPreviousTasks() async throws {
     let manager = TaskManager()
     let events = UnfairLockAtomic<[String]>([])
 
@@ -55,7 +56,7 @@ final class TaskWaitTests: XCTestCase {
     // Wait for tasks
     do {
       _ = try await task1.value
-      XCTFail("Task1 should have been cancelled")
+      Issue.record("Task1 should have been cancelled")
     } catch is CancellationError {
       // Expected
     }
@@ -63,10 +64,10 @@ final class TaskWaitTests: XCTestCase {
     _ = try await task2.value
 
     // Only task2 should complete
-    XCTAssertEqual(events.value, ["task2"])
+    #expect(events.value == ["task2"])
   }
 
-  func test_concurrent_tasks_with_different_keys() async throws {
+  @Test func concurrentTasksWithDifferentKeys() async throws {
     let manager = TaskManager()
     let events = UnfairLockAtomic<[String]>([])
     let startTime = Date()
@@ -95,11 +96,11 @@ final class TaskWaitTests: XCTestCase {
     let elapsed = Date().timeIntervalSince(startTime)
 
     // Should complete in ~100ms (concurrent), not ~300ms (sequential)
-    XCTAssertLessThan(elapsed, 0.2, "Tasks should run concurrently")
-    XCTAssertEqual(events.value.count, 3, "All tasks should complete")
+    #expect(elapsed < 0.2, "Tasks should run concurrently")
+    #expect(events.value.count == 3, "All tasks should complete")
   }
 
-  func test_task_cancellation_propagation() async throws {
+  @Test func taskCancellationPropagation() async throws {
     let manager = TaskManager()
     let events = UnfairLockAtomic<[String]>([])
 
@@ -143,13 +144,13 @@ final class TaskWaitTests: XCTestCase {
     _ = try? await task3.value
 
     // Should see cancellation events
-    XCTAssertTrue(events.value.contains("task1-cancelled") || events.value.isEmpty)
-    XCTAssertFalse(events.value.contains("task1-completed"))
-    XCTAssertFalse(events.value.contains("task2-completed"))
-    XCTAssertFalse(events.value.contains("task3-completed"))
+    #expect(events.value.contains("task1-cancelled") || events.value.isEmpty)
+    #expect(!events.value.contains("task1-completed"))
+    #expect(!events.value.contains("task2-completed"))
+    #expect(!events.value.contains("task3-completed"))
   }
 
-  func test_task_completion_order_with_wait_mode() async throws {
+  @Test func taskCompletionOrderWithWaitMode() async throws {
     let manager = TaskManager()
     let events = UnfairLockAtomic<[String]>([])
     let completionTimes = UnfairLockAtomic<[String: Date]>([:])
@@ -181,12 +182,12 @@ final class TaskWaitTests: XCTestCase {
     _ = try await task3.value
 
     // Verify order
-    XCTAssertEqual(events.value, ["task1", "task2", "task3"], "Tasks should complete in order")
+    #expect(events.value == ["task1", "task2", "task3"], "Tasks should complete in order")
 
     // Verify timing - task2 should complete after task1 despite being faster
     if let time1 = completionTimes.value["task1"],
        let time2 = completionTimes.value["task2"] {
-      XCTAssertTrue(time2 > time1, "Task2 should complete after task1")
+      #expect(time2 > time1, "Task2 should complete after task1")
     }
   }
 

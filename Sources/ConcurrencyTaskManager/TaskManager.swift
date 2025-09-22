@@ -179,7 +179,7 @@ public final class TaskManager: Sendable {
     let extendedContinuation: AutoReleaseContinuationBox<Return> = .init(nil)
 
     let referenceTask = Task { [weak extendedContinuation] in
-      return try await withUnsafeThrowingContinuation{ (continuation: UnsafeContinuation<Return, Error>) in
+      return try await withUnsafeThrowingContinuation { (continuation: UnsafeContinuation<Return, Error>) in
         extendedContinuation?.setContinuation(continuation)
       }
     }

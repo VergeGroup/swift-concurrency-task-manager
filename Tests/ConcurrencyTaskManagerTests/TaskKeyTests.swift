@@ -1,9 +1,9 @@
-import XCTest
+import Testing
 import ConcurrencyTaskManager
 
-final class TaskKeyTests: XCTestCase {
+@Suite struct TaskKeyTests {
 
-  func testBase() {
+  @Test func base() {
 
     enum LocalKey: TaskKeyType {}
     enum LocalKey2: TaskKeyType {}
@@ -11,18 +11,18 @@ final class TaskKeyTests: XCTestCase {
     let key = TaskKey(LocalKey.self)
     let key2 = TaskKey(LocalKey2.self)
 
-    XCTAssertNotEqual(key, key2)
-    XCTAssertEqual(key, key)
+    #expect(key != key2)
+    #expect(key == key)
   }
 
-  func testCombined() {
+  @Test func combined() {
 
     enum LocalKey: TaskKeyType {}
 
     let key = TaskKey(LocalKey.self)
 
-    XCTAssertEqual(key, key.combined(.init(LocalKey.self)))
-    XCTAssertNotEqual(key, key.combined("A"))
+    #expect(key == key.combined(.init(LocalKey.self)))
+    #expect(key != key.combined("A"))
 
   }
 
