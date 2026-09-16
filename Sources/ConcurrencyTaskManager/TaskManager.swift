@@ -177,14 +177,21 @@ public final class TaskManager: Sendable {
   ) -> Task<Return, Error> {
 
     let extendedContinuation: AutoReleaseContinuationBox<Return> = .init(nil)
+    let continuationRegistration = TaskResultContinuationRegistration(box: extendedContinuation)
 
-    let referenceTask = Task { [weak extendedContinuation] in
-      return try await withUnsafeThrowingContinuation { (continuation: UnsafeContinuation<Return, Error>) in
-        extendedContinuation?.setContinuation(continuation)
+    let referenceTask = Task { [continuationRegistration] in
+      return try await withUnsafeThrowingContinuation { continuation in
+        continuationRegistration.setContinuation(continuation)
       }
     }
 
-    let newNode = TaskNode(label: label) { [weak self] node in
+    let newNode = TaskNode(
+      label: label,
+      onInvalidation: {
+        referenceTask.cancel()
+        extendedContinuation.resume(throwing: CancellationError())
+      }
+    ) { [weak self] node in
 
       await withTaskCancellationHandler {
         do {
@@ -294,23 +301,17 @@ public final class TaskManager: Sendable {
 
   private func loopback(key: TaskKey, completedNode: TaskNode) {
     state.withLock { state in
-      if let headNode = state.queues[key] {
+      guard let headNode = state.queues[key], headNode == completedNode else { return }
 
-        let nextNode = headNode.state.withLock { $0.next }
-        if let nextNode = nextNode {
-          // drop headNode, set nextNode as head
-          state.queues[key] = nextNode
+      if let nextNode = headNode.state.withLock({ $0.next }) {
+        // drop headNode, set nextNode as head
+        state.queues[key] = nextNode
 
-          if state.isRunning {
-            nextNode.activate()
-          }
-        } else {
-          if headNode == completedNode {
-            state.queues.removeValue(forKey: key)
-          }
+        if state.isRunning {
+          nextNode.activate()
         }
       } else {
-        // there is no head node, do nothing
+        state.queues.removeValue(forKey: key)
       }
 
       Log.debug(.taskManager, state.queues)
@@ -323,4 +324,24 @@ public final class TaskManager: Sendable {
     }
   }
 
+}
+
+/// Keeps a completion box alive only until a caller-facing task registers its continuation.
+private final class TaskResultContinuationRegistration<T>: @unchecked Sendable {
+
+  private let lock = NSLock()
+  private var box: AutoReleaseContinuationBox<T>?
+
+  init(box: AutoReleaseContinuationBox<T>) {
+    self.box = box
+  }
+
+  func setContinuation(_ continuation: UnsafeContinuation<T, Error>) {
+    lock.lock()
+    let box = self.box
+    self.box = nil
+    lock.unlock()
+
+    box?.setContinuation(continuation)
+  }
 }
