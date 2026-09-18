@@ -26,6 +26,9 @@ struct TaskNode: CustomStringConvertible, Sendable, Equatable {
     var continuations: [CheckedContinuation<Void, Never>] = []
   }
 
+  /// Completes the caller-facing task when this node is invalidated before activation.
+  private let onInvalidation: @Sendable () -> Void
+
   let taskFactory: @Sendable (TaskNode) async -> Void
   let label: String
   let id: UUID
@@ -33,10 +36,12 @@ struct TaskNode: CustomStringConvertible, Sendable, Equatable {
 
   init(
     label: String = "",
+    onInvalidation: @escaping @Sendable () -> Void = {},
     @_inheritActorContext taskFactory: @escaping @Sendable @isolated(any) (TaskNode) async -> Void
   ) {
     self.label = label
     self.id = UUID()
+    self.onInvalidation = onInvalidation
     self.taskFactory = taskFactory
     self.state = OSAllocatedUnfairLock(initialState: State())
   }
@@ -68,14 +73,26 @@ struct TaskNode: CustomStringConvertible, Sendable, Equatable {
   }
 
   func invalidate() {
-    state.withLock { state in
+    let invalidation = state.withLock { state -> (Task<Void, Error>?, [CheckedContinuation<Void, Never>])? in
+      guard state.flags.contains(.invalidated) == false else { return nil }
+
       Log.debug(.taskNode, "invalidated \(label) <\(self.id)>")
       state.flags.insert(.invalidated)
-      for continuation in state.continuations {
-        continuation.resume()
-      }
+      let continuations = state.continuations
       state.continuations.removeAll()
-      state.anyTask?.cancel()
+      return (state.anyTask, continuations)
+    }
+
+    guard let (task, continuations) = invalidation else { return }
+
+    for continuation in continuations {
+      continuation.resume()
+    }
+
+    if let task {
+      task.cancel()
+    } else {
+      onInvalidation()
     }
   }
 

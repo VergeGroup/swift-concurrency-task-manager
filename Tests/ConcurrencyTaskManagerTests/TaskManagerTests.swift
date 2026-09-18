@@ -200,4 +200,169 @@ func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
 
     #expect(completed.value)
   }
+
+  @Test func staleCompletedNodeDoesNotAdvanceReplacementQueue() async {
+    let manager = TaskManager()
+    let key = TaskKey("stale-completion")
+    let oldTaskGate = NonCooperativeGate()
+    let replacementTaskGate = NonCooperativeGate()
+
+    let oldTaskStarted = NonCooperativeGate()
+    let oldOperationFinished = NonCooperativeGate()
+    let replacementTaskStarted = NonCooperativeGate()
+    let didStartQueuedTask = UnfairLockAtomic(false)
+
+    let oldTask = manager.task(label: "old", key: key, mode: .dropCurrent) {
+      await oldTaskStarted.open()
+      await oldTaskGate.wait()
+      await oldOperationFinished.open()
+    }
+
+    await oldTaskStarted.wait()
+
+    let replacementTask = manager.task(label: "replacement", key: key, mode: .dropCurrent) {
+      await replacementTaskStarted.open()
+      await replacementTaskGate.wait()
+    }
+
+    await replacementTaskStarted.wait()
+
+    let queuedTask = manager.task(label: "queued", key: key, mode: .waitInCurrent) {
+      didStartQueuedTask.value = true
+    }
+
+    await oldTaskGate.open()
+    await oldOperationFinished.wait()
+
+    await expectCancellation(from: oldTask)
+
+    let didStartBeforeReplacementFinished = await waitUntil(timeoutMilliseconds: 250) {
+      didStartQueuedTask.value
+    }
+    #expect(didStartBeforeReplacementFinished == false)
+
+    await replacementTaskGate.open()
+
+    let didStartAfterReplacementFinished = await waitUntil {
+      didStartQueuedTask.value
+    }
+    #expect(didStartAfterReplacementFinished)
+
+    do {
+      _ = try await replacementTask.value
+      _ = try await queuedTask.value
+    } catch {
+      Issue.record("Expected the current queue to finish, received \(error)")
+    }
+  }
+
+  @Test func invalidatingUnstartedQueuedTaskCompletesWithCancellationError() async {
+    let manager = TaskManager()
+    let key = TaskKey("queued-invalidation")
+    let oldTaskGate = NonCooperativeGate()
+    let replacementTaskGate = NonCooperativeGate()
+
+    let oldTaskStarted = NonCooperativeGate()
+    let oldTask = manager.task(label: "old", key: key, mode: .dropCurrent) {
+      await oldTaskStarted.open()
+      await oldTaskGate.wait()
+    }
+
+    await oldTaskStarted.wait()
+
+    let didStartQueuedTask = UnfairLockAtomic(false)
+    let queuedTask = manager.task(label: "queued", key: key, mode: .waitInCurrent) {
+      didStartQueuedTask.value = true
+    }
+
+    let queuedTaskOutcome = UnfairLockAtomic<Result<Void, Error>?>(nil)
+    let queuedTaskObserver = Task {
+      do {
+        _ = try await queuedTask.value
+        queuedTaskOutcome.value = .success(())
+      } catch {
+        queuedTaskOutcome.value = .failure(error)
+      }
+    }
+
+    let replacementTask = manager.task(label: "replacement", key: key, mode: .dropCurrent) {
+      await replacementTaskGate.wait()
+    }
+
+    let didFinishQueuedTask = await waitUntil {
+      queuedTaskOutcome.value != nil
+    }
+    #expect(didFinishQueuedTask)
+    #expect(didStartQueuedTask.value == false)
+
+    switch queuedTaskOutcome.value {
+    case .failure(let error) where error is CancellationError:
+      break
+    case .failure(let error):
+      Issue.record("Expected CancellationError, received \(error)")
+    case .success:
+      Issue.record("Expected the invalidated queued task to fail")
+    case nil:
+      Issue.record("Expected the invalidated queued task to finish")
+    }
+
+    await oldTaskGate.open()
+    await replacementTaskGate.open()
+
+    await expectCancellation(from: oldTask)
+    _ = try? await replacementTask.value
+    queuedTaskObserver.cancel()
+  }
+}
+
+private func expectCancellation<Success>(from task: Task<Success, Error>) async {
+  do {
+    _ = try await task.value
+    Issue.record("Expected the task to throw CancellationError")
+  } catch is CancellationError {
+  } catch {
+    Issue.record("Expected CancellationError, received \(error)")
+  }
+}
+
+private func waitUntil(
+  timeoutMilliseconds: Int = 1_000,
+  condition: @escaping @Sendable () -> Bool
+) async -> Bool {
+  for _ in 0..<timeoutMilliseconds / 10 {
+    guard condition() == false else { return true }
+    try? await Task.sleep(nanoseconds: 10_000_000)
+  }
+
+  return condition()
+}
+
+/**
+ A manually opened gate that deliberately ignores cancellation while suspended.
+
+ Tests use it to model work that keeps running after its task receives a cancellation request.
+ */
+private actor NonCooperativeGate {
+
+  private var isOpen = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    guard isOpen == false else { return }
+
+    await withCheckedContinuation { continuation in
+      waiters.append(continuation)
+    }
+  }
+
+  func open() {
+    isOpen = true
+
+    let pendingWaiters = waiters
+    waiters.removeAll()
+
+    for waiter in pendingWaiters {
+      waiter.resume()
+    }
+  }
 }
