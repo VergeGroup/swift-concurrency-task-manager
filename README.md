@@ -328,7 +328,7 @@ Identifies and groups related tasks.
 
 #### @LocalTask Property Wrapper
 
-Provides TaskManager functionality in SwiftUI views with automatic lifecycle management. The property wrapper directly exposes a `TaskManager` instance that is automatically cleaned up when the view is deallocated.
+Preserves a `TaskManager` in SwiftUI state across updates to the same view identity. When its backing storage is released, it cancels running and queued tasks. Cancellation follows the storage's lifetime rather than `onDisappear`, and running operations must cooperate with cancellation.
 
 #### Extension Methods
 
