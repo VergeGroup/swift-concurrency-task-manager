@@ -256,6 +256,54 @@ func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
     }
   }
 
+  @Test @MainActor
+  func cancelAllBeforeOperationStartsSkipsOperation() async {
+    let manager = TaskManager()
+    let didStart = UnfairLockAtomic(false)
+
+    let task = manager.task(key: "cancel-before-entry", mode: .dropCurrent) {
+      didStart.value = true
+    }
+    // The inherited MainActor operation cannot enter until this test suspends.
+    manager.cancelAll()
+
+    await expectCancellation(from: task)
+    #expect(didStart.value == false)
+  }
+
+  @Test @MainActor
+  func cancelKeyBeforeOperationStartsSkipsOperation() async {
+    let manager = TaskManager()
+    let key = TaskKey("cancel-key-before-entry")
+    let didStart = UnfairLockAtomic(false)
+
+    let task = manager.task(key: key, mode: .dropCurrent) {
+      didStart.value = true
+    }
+    manager.cancel(key: key)
+
+    await expectCancellation(from: task)
+    #expect(didStart.value == false)
+  }
+
+  @Test @MainActor
+  func replacingTaskBeforeOperationStartsSkipsOldOperation() async throws {
+    let manager = TaskManager()
+    let key = TaskKey("replace-before-entry")
+    let events = UnfairLockAtomic<[String]>([])
+
+    let oldTask = manager.task(key: key, mode: .dropCurrent) {
+      events.modify { $0.append("old") }
+    }
+    let replacement = manager.task(key: key, mode: .dropCurrent) {
+      events.modify { $0.append("replacement") }
+    }
+
+    await expectCancellation(from: oldTask)
+    try await replacement.value
+    #expect(events.value == ["replacement"])
+  }
+
   @Test func invalidatingUnstartedQueuedTaskCompletesWithCancellationError() async {
     let manager = TaskManager()
     let key = TaskKey("queued-invalidation")

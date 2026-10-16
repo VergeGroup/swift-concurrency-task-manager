@@ -159,6 +159,8 @@ public final class TaskManager: Sendable {
   
   /// Registers an asynchronous operation
   ///
+  /// Checks cancellation before invoking the operation. Once started, the operation
+  /// must cooperate with cancellation across its own suspension points.
   /// Task's Error may be ``CancellationError``
   /// - Parameters:
   ///   - label: String value for debugging
@@ -195,7 +197,7 @@ public final class TaskManager: Sendable {
 
       await withTaskCancellationHandler {
         do {
-          let result = try await operation()
+          let result = try await Self.performOperation(operation, isolation: operation.isolation)
 
           guard Task.isCancelled == false else {
             extendedContinuation.resume(throwing: CancellationError())
@@ -297,6 +299,15 @@ public final class TaskManager: Sendable {
 
       state.queues.removeAll()
     }
+  }
+
+  /// Checks on the operation's actor after any executor hop, immediately before invocation.
+  private static func performOperation<Return: Sendable>(
+    _ operation: @Sendable @isolated(any) () async throws -> Return,
+    isolation: isolated (any Actor)?
+  ) async throws -> Return {
+    try Task.checkCancellation()
+    return try await operation()
   }
 
   private func loopback(key: TaskKey, completedNode: TaskNode) {
