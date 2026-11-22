@@ -1,3 +1,4 @@
+import DequeModule
 import Foundation
 import os.lock
 
@@ -109,7 +110,20 @@ public final class TaskManager: Sendable {
 
   private struct State: Sendable {
     var isRunning: Bool = true
-    var queues: [TaskKey: TaskNode] = [:]
+    var queues: [TaskKey: Deque<TaskNode>] = [:]
+
+    func invalidate(_ queue: Deque<TaskNode>) {
+      for node in queue {
+        node.invalidate()
+      }
+    }
+
+    // Return the queue so captured values can deinitialize outside the manager lock.
+    mutating func removeQueue(for key: TaskKey) -> Deque<TaskNode>? {
+      guard let queue = queues.removeValue(forKey: key) else { return nil }
+      invalidate(queue)
+      return queue
+    }
   }
 
   private let state: OSAllocatedUnfairLock<State>
@@ -231,32 +245,22 @@ public final class TaskManager: Sendable {
 
     }
 
-    state.withLock { state in
+    let removedQueue = state.withLock { state in
+      let removedQueue: Deque<TaskNode>?
       switch mode {
       case .dropCurrent:
-
-        state.queues[key]?.forEach {
-          $0.invalidate()
-        }
-
-        state.queues[key] = newNode
-        if state.isRunning {
-          newNode.activate()
-        }
-
+        removedQueue = state.removeQueue(for: key)
       case .waitInCurrent:
-
-        if let head = state.queues[key] {
-          head.endpoint().addNext(newNode)
-        } else {
-          state.queues[key] = newNode
-          if state.isRunning {
-            newNode.activate()
-          }
-        }
-
+        removedQueue = nil
       }
+
+      state.queues[key, default: []].append(newNode)
+      if state.isRunning, state.queues[key]?.count == 1 {
+        newNode.activate()
+      }
+      return removedQueue
     }
+    withExtendedLifetime(removedQueue) {}
 
     return referenceTask
     
@@ -276,29 +280,23 @@ public final class TaskManager: Sendable {
    Cancels tasks for the specified key.
    */
   public func cancel(key: TaskKey) {
-    state.withLock { state in
-      if let head = state.queues[key] {
-        head.forEach { node in
-          node.invalidate()
-        }
-        state.queues.removeValue(forKey: key)
-      }
-    }
+    let removedQueue = state.withLock { $0.removeQueue(for: key) }
+    withExtendedLifetime(removedQueue) {}
   }
 
   /**
    Cancells all tasks managed in this manager.
    */
   public func cancelAll() {
-    state.withLock { state in
-      for head in state.queues.values {
-        head.forEach { node in
-          node.invalidate()
-        }
-      }
-
+    let removedQueues = state.withLock { state in
+      let queues = state.queues
       state.queues.removeAll()
+      for queue in queues.values {
+        state.invalidate(queue)
+      }
+      return queues
     }
+    withExtendedLifetime(removedQueues) {}
   }
 
   /// Checks on the operation's actor after any executor hop, immediately before invocation.
@@ -312,12 +310,9 @@ public final class TaskManager: Sendable {
 
   private func loopback(key: TaskKey, completedNode: TaskNode) {
     state.withLock { state in
-      guard let headNode = state.queues[key], headNode == completedNode else { return }
-
-      if let nextNode = headNode.state.withLock({ $0.next }) {
-        // drop headNode, set nextNode as head
-        state.queues[key] = nextNode
-
+      guard state.queues[key]?.first == completedNode else { return }
+      _ = state.queues[key]?.popFirst()
+      if let nextNode = state.queues[key]?.first {
         if state.isRunning {
           nextNode.activate()
         }
@@ -325,13 +320,13 @@ public final class TaskManager: Sendable {
         state.queues.removeValue(forKey: key)
       }
 
-      Log.debug(.taskManager, state.queues)
+      Log.debug(.taskManager, "completed \(completedNode)")
     }
   }
 
   private func resume(state: inout State) {
-    for (_, element) in state.queues {
-      element.activate()
+    for queue in state.queues.values {
+      queue.first?.activate()
     }
   }
 
