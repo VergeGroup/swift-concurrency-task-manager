@@ -1,48 +1,32 @@
 @testable import ConcurrencyTaskManager
 import Testing
-import Foundation
 
 struct TaskNodeWaitTests {
 
-  @Test func wait_completes_after_task_finishes() async {
-
-    let events: UnfairLockAtomic<[String]> = .init([])
-
-    let node = TaskNode(label: "test-wait") { _ in
-      try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-      events.modify {
-        $0.append("task-completed")
+  @Test func waitCompletesAfterOperationReturns() async {
+    let operationFinished = UnfairLockAtomic(false)
+    let node = TaskNode(label: "test-wait") { node in
+      do {
+        try await node.performOperation({
+          operationFinished.value = true
+        }, isolation: nil)
+      } catch {
+        Issue.record("Expected the operation to succeed, received \(error)")
       }
     }
 
-    // Activate the task
     node.activate()
-
-    // Wait should block until task completes
-    await node.wait()
-    events.modify { $0.append("wait-completed") }
-
-    #expect(events.withValue { $0 } == ["task-completed", "wait-completed"])
+    await node.waitForCompletion()
+    #expect(operationFinished.value)
   }
 
-  @Test func wait_returns_immediately_for_invalidated_task() async {
-
-    let events: UnfairLockAtomic<[String]> = .init([])
-
+  @Test func waitCompletesAfterInvalidationBeforeActivation() async {
     let node = TaskNode(label: "invalidated-task") { _ in
-      // This might run briefly before invalidation
-      try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-      events.modify { $0.append("task-completed") }
+      Issue.record("An invalidated queued node must not run")
     }
 
-    // Activate and immediately invalidate
+    #expect(node.invalidate())
     node.activate()
-    node.invalidate()
-
-    // Wait should return immediately for already-invalidated task
-    await node.wait()
-    events.modify { $0.append("wait-completed") }
-
-    #expect(events.withValue { $0 } == ["wait-completed"])
+    await node.waitForCompletion()
   }
 }

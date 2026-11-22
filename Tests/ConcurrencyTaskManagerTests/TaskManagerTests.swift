@@ -410,7 +410,7 @@ private final class DeinitProbe: Sendable {
   }
 }
 
-private func expectCancellation<Success>(from task: Task<Success, Error>) async {
+func expectCancellation<Success>(from task: Task<Success, Error>) async {
   do {
     _ = try await task.value
     Issue.record("Expected the task to throw CancellationError")
@@ -420,7 +420,7 @@ private func expectCancellation<Success>(from task: Task<Success, Error>) async 
   }
 }
 
-private func waitUntil(
+func waitUntil(
   timeoutMilliseconds: Int = 1_000,
   condition: @escaping @Sendable () -> Bool
 ) async -> Bool {
@@ -437,7 +437,7 @@ private func waitUntil(
 
  Tests use it to model work that keeps running after its task receives a cancellation request.
  */
-private actor NonCooperativeGate {
+actor NonCooperativeGate {
 
   private var isOpen = false
   private var waiters: [CheckedContinuation<Void, Never>] = []

@@ -13,16 +13,25 @@ struct TaskNode: CustomStringConvertible, Sendable, Equatable {
     static let activated   = StateFlags(rawValue: 1 << 0)
     static let finished    = StateFlags(rawValue: 1 << 1)
     static let invalidated = StateFlags(rawValue: 1 << 2)
+    static let started     = StateFlags(rawValue: 1 << 3)
   }
 
   private struct State: Sendable {
     var flags: StateFlags = []
     var anyTask: Task<Void, Error>?
     var continuations: [CheckedContinuation<Void, Never>] = []
+
+    mutating func finish() -> [CheckedContinuation<Void, Never>]? {
+      guard flags.insert(.finished).inserted else { return nil }
+      let waiters = continuations
+      continuations.removeAll()
+      return waiters
+    }
   }
 
-  /// Completes the caller-facing task when this node is invalidated before activation.
+  /// Completes the caller-facing task when this node is invalidated before invocation.
   private let onInvalidation: @Sendable () -> Void
+  private let onCompletion: @Sendable (TaskNode) -> Void
 
   private let taskFactory: @Sendable (TaskNode) async -> Void
   private let label: String
@@ -32,11 +41,13 @@ struct TaskNode: CustomStringConvertible, Sendable, Equatable {
   init(
     label: String = "",
     onInvalidation: @escaping @Sendable () -> Void = {},
+    onCompletion: @escaping @Sendable (TaskNode) -> Void = { _ in },
     @_inheritActorContext taskFactory: @escaping @Sendable @isolated(any) (TaskNode) async -> Void
   ) {
     self.label = label
     self.id = UUID()
     self.onInvalidation = onInvalidation
+    self.onCompletion = onCompletion
     self.taskFactory = taskFactory
     self.state = OSAllocatedUnfairLock(initialState: State())
   }
@@ -56,49 +67,67 @@ struct TaskNode: CustomStringConvertible, Sendable, Equatable {
 
         await taskFactory(self)
 
-        stateRef.withLock { state in
-          state.flags.insert(.finished)
-          for continuation in state.continuations {
-            continuation.resume()
-          }
-          state.continuations.removeAll()
+        guard let waiters = stateRef.withLock({ $0.finish() }) else { return }
+        self.onCompletion(self)
+        for waiter in waiters {
+          waiter.resume()
         }
       }
     }
   }
 
-  func invalidate() {
-    let invalidation = state.withLock { state -> (Task<Void, Error>?, [CheckedContinuation<Void, Never>])? in
+  /// Claims the operation on its own actor, after any executor hop.
+  func performOperation<Return: Sendable>(
+    _ operation: @Sendable @isolated(any) () async throws -> Return,
+    isolation: isolated (any Actor)?
+  ) async throws -> Return {
+    try Task.checkCancellation()
+    try state.withLock { state in
+      guard state.flags.contains(.invalidated) == false else {
+        throw CancellationError()
+      }
+      state.flags.insert(.started)
+    }
+    return try await operation()
+  }
+
+  /// Returns whether invalidation completed the node before the operation started.
+  @discardableResult
+  func invalidate() -> Bool {
+    let invalidation = state.withLock { state
+      -> (task: Task<Void, Error>?, waiters: [CheckedContinuation<Void, Never>]?)? in
       guard state.flags.contains(.invalidated) == false else { return nil }
 
       Log.debug(.taskNode, "invalidated \(label) <\(self.id)>")
       state.flags.insert(.invalidated)
-      let continuations = state.continuations
-      state.continuations.removeAll()
-      return (state.anyTask, continuations)
+      if state.flags.contains(.started) {
+        return (state.anyTask, nil)
+      }
+      return (state.anyTask, state.finish())
     }
 
-    guard let (task, continuations) = invalidation else { return }
+    guard let invalidation else { return false }
+    invalidation.task?.cancel()
+    guard let waiters = invalidation.waiters else { return false }
 
-    for continuation in continuations {
-      continuation.resume()
+    onInvalidation()
+    for waiter in waiters {
+      waiter.resume()
     }
-
-    if let task {
-      task.cancel()
-    } else {
-      onInvalidation()
-    }
+    return true
   }
 
-  func wait() async {
-    await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-      state.withLock { state in
-        if state.flags.contains(.finished) || state.flags.contains(.invalidated) {
-          c.resume()
-        } else {
-          state.continuations.append(c)
+  func waitForCompletion() async {
+    await withCheckedContinuation { continuation in
+      let alreadyFinished = state.withLock { state in
+        guard state.flags.contains(.finished) == false else {
+          return true
         }
+        state.continuations.append(continuation)
+        return false
+      }
+      if alreadyFinished {
+        continuation.resume()
       }
     }
   }
