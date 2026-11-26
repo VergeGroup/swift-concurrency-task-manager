@@ -111,10 +111,13 @@ public final class TaskManager: Sendable {
   private struct State: Sendable {
     var isRunning: Bool = true
     var queues: [TaskKey: Deque<TaskNode>] = [:]
+    var unfinishedNodes: [UUID: TaskNode] = [:]
 
-    func invalidate(_ queue: Deque<TaskNode>) {
+    mutating func invalidate(_ queue: Deque<TaskNode>) {
       for node in queue {
-        node.invalidate()
+        if node.invalidate() {
+          unfinishedNodes.removeValue(forKey: node.id)
+        }
       }
     }
 
@@ -170,6 +173,24 @@ public final class TaskManager: Sendable {
   public func isRunning(for key: TaskKey) -> Bool {
     return state.withLock { $0.queues[key] != nil }
   }
+
+  /// Waits for the unfinished operations registered when this call takes its snapshot.
+  ///
+  /// This includes queued operations across all keys and operations still finishing after
+  /// cancellation. Operations invalidated before invocation count as complete immediately.
+  /// Later registrations are left for subsequent calls.
+  ///
+  /// Cancellation of the caller leaves both the wait and the managed operations running.
+  /// Use the individual task handles to retrieve results and errors.
+  ///
+  /// Call from outside this manager's operations to avoid waiting for the calling
+  /// operation itself. The caller controls admission and resumption of paused work.
+  public func waitForAll() async {
+    let unfinishedNodes = state.withLock { Array($0.unfinishedNodes.values) }
+    for node in unfinishedNodes {
+      await node.waitForCompletion()
+    }
+  }
   
   /// Registers an asynchronous operation
   ///
@@ -206,12 +227,15 @@ public final class TaskManager: Sendable {
       onInvalidation: {
         referenceTask.cancel()
         extendedContinuation.resume(throwing: CancellationError())
+      },
+      onCompletion: { [weak self] node in
+        self?.operationDidFinish(key: key, completedNode: node)
       }
-    ) { [weak self] node in
+    ) { node in
 
       await withTaskCancellationHandler {
         do {
-          let result = try await Self.performOperation(operation, isolation: operation.isolation)
+          let result = try await node.performOperation(operation, isolation: operation.isolation)
 
           guard Task.isCancelled == false else {
             extendedContinuation.resume(throwing: CancellationError())
@@ -233,16 +257,6 @@ public final class TaskManager: Sendable {
       } onCancel: {
         referenceTask.cancel()
       }
-
-      // connecting to the next if presents
-
-      guard let self = self else { return }
-      
-      self.loopback(
-        key: key,
-        completedNode: node
-      )
-
     }
 
     let removedQueue = state.withLock { state in
@@ -254,6 +268,7 @@ public final class TaskManager: Sendable {
         removedQueue = nil
       }
 
+      state.unfinishedNodes[newNode.id] = newNode
       state.queues[key, default: []].append(newNode)
       if state.isRunning, state.queues[key]?.count == 1 {
         newNode.activate()
@@ -299,17 +314,9 @@ public final class TaskManager: Sendable {
     withExtendedLifetime(removedQueues) {}
   }
 
-  /// Checks on the operation's actor after any executor hop, immediately before invocation.
-  private static func performOperation<Return: Sendable>(
-    _ operation: @Sendable @isolated(any) () async throws -> Return,
-    isolation: isolated (any Actor)?
-  ) async throws -> Return {
-    try Task.checkCancellation()
-    return try await operation()
-  }
-
-  private func loopback(key: TaskKey, completedNode: TaskNode) {
+  private func operationDidFinish(key: TaskKey, completedNode: TaskNode) {
     state.withLock { state in
+      state.unfinishedNodes.removeValue(forKey: completedNode.id)
       guard state.queues[key]?.first == completedNode else { return }
       _ = state.queues[key]?.popFirst()
       if let nextNode = state.queues[key]?.first {
