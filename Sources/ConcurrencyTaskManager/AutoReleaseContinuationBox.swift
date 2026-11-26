@@ -60,11 +60,7 @@ final class AutoReleaseContinuationBox<T>: @unchecked Sendable {
     resume(with: .failure(error))
   }
 
-  func resume(returning value: sending T) {
-    resume(with: .success(value))
-  }
-
-  private func resume(with result: sending Result<T, Error>) {
+  func resume(with result: sending Result<T, Error>) {
     lock.lock()
 
     switch state {

@@ -201,6 +201,68 @@ func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
     #expect(completed.value)
   }
 
+  @Test func dropIfBusyPreservesRunningAndQueuedWork() async throws {
+    let manager = TaskManager()
+    let key = TaskKey("refresh")
+    let started = NonCooperativeGate()
+    let finish = NonCooperativeGate()
+    let didStartDiscardedTask = UnfairLockAtomic(false)
+
+    let running = manager.task(key: key, mode: .dropIfBusy) {
+      await started.open()
+      await finish.wait()
+      return "running"
+    }
+    await started.wait()
+
+    let queued = manager.task(key: key, mode: .waitInCurrent) { "queued" }
+    let discarded = manager.taskDetached(key: key, mode: .dropIfBusy) {
+      didStartDiscardedTask.value = true
+    }
+    #expect(discarded.isCancelled)
+
+    let independent = manager.task(key: "other", mode: .dropIfBusy) { "independent" }
+    let independentResult = await independent.result
+
+    await finish.open()
+    await expectCancellation(from: discarded)
+    #expect(didStartDiscardedTask.value == false)
+    #expect(try await running.value == "running")
+    #expect(try await queued.value == "queued")
+    #expect(try independentResult.get() == "independent")
+
+    let next = manager.task(key: key, mode: .dropIfBusy) { "next" }
+    #expect(try await next.value == "next")
+  }
+
+  @Test func dropIfBusyDiscardsWorkForAnOccupiedKeyWhilePaused() async throws {
+    let manager = TaskManager()
+    let key = TaskKey("refresh")
+    let events = UnfairLockAtomic<[String]>([])
+    manager.setIsRunning(false)
+
+    let first = manager.task(key: key, mode: .dropIfBusy) {
+      events.modify { $0.append("first") }
+    }
+    let discarded = manager.task(key: key, mode: .dropIfBusy) {
+      events.modify { $0.append("discarded") }
+    }
+    #expect(discarded.isCancelled)
+    #expect(events.value.isEmpty)
+
+    let discardedCompleted = UnfairLockAtomic(false)
+    Task {
+      await expectCancellation(from: discarded)
+      discardedCompleted.value = true
+    }
+    #expect(await waitUntil { discardedCompleted.value })
+
+    manager.setIsRunning(true)
+
+    try await first.value
+    #expect(events.value == ["first"])
+  }
+
   @Test func staleCompletedNodeDoesNotAdvanceReplacementQueue() async {
     let manager = TaskManager()
     let key = TaskKey("stale-completion")

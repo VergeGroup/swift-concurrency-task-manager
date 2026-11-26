@@ -12,7 +12,7 @@ TaskManager is a powerful Swift library that brings order to chaos in asynchrono
 
 TaskManager solves this by providing:
 - **Task isolation by key** - Group related operations together
-- **Execution control** - Choose whether to cancel existing tasks or queue new ones
+- **Execution control** - Cancel existing work, queue new work, or skip new work when its key is busy
 - **SwiftUI integration** - First-class support for UI-driven async operations
 - **Thread-safe design** - Built with manual synchronization for optimal performance
 
@@ -65,10 +65,11 @@ let key = TaskKey.code() // Uses file:line:column
 
 ### Execution Modes
 
-TaskManager offers two execution modes:
+TaskManager offers three execution modes:
 
 - **`.dropCurrent`** - Cancels any running task with the same key before starting the new one
 - **`.waitInCurrent`** - Queues the new task to run after existing tasks complete
+- **`.dropIfBusy`** - Discards the new task if the same key already has running or queued work, including while the manager is paused. The submitted operation is never invoked, and awaiting the returned task's `value` throws `CancellationError`.
 
 ### Task Isolation
 
