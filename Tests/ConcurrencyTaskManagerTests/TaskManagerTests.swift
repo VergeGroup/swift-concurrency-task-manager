@@ -318,6 +318,40 @@ func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
     }
   }
 
+  @Test func cancellationReleasesQueuedCapturesWhileTheHeadIsStillRunning() async {
+    let manager = TaskManager()
+    let key = TaskKey("release-queued-capture")
+    let started = NonCooperativeGate()
+    let releaseHead = NonCooperativeGate()
+    let didRelease = UnfairLockAtomic(false)
+
+    let running = manager.task(key: key, mode: .waitInCurrent) {
+      await started.open()
+      await releaseHead.wait()
+    }
+    await started.wait()
+
+    let queued: Task<Void, Error>
+    do {
+      let capture = DeinitProbe {
+        #expect(manager.isRunning(for: key) == false)
+        didRelease.value = true
+      }
+      queued = manager.task(key: key, mode: .waitInCurrent) {
+        withExtendedLifetime(capture) {
+          _ = Issue.record("The queued operation must not run")
+        }
+      }
+    }
+
+    manager.cancel(key: key)
+    await expectCancellation(from: queued)
+    #expect(didRelease.value)
+
+    await releaseHead.open()
+    await expectCancellation(from: running)
+  }
+
   @Test @MainActor
   func cancelAllBeforeOperationStartsSkipsOperation() async {
     let manager = TaskManager()
@@ -422,6 +456,19 @@ func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
     await expectCancellation(from: oldTask)
     _ = try? await replacementTask.value
     queuedTaskObserver.cancel()
+  }
+}
+
+private final class DeinitProbe: Sendable {
+
+  private let onDeinit: @Sendable () -> Void
+
+  init(_ onDeinit: @escaping @Sendable () -> Void) {
+    self.onDeinit = onDeinit
+  }
+
+  deinit {
+    onDeinit()
   }
 }
 
