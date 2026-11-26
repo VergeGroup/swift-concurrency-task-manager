@@ -1,13 +1,9 @@
 import Foundation
 import os.lock
 
-/**
- structure of linked-list
- it has a node for the next task after this node.
- */
 struct TaskNode: CustomStringConvertible, Sendable, Equatable {
 
-  struct StateFlags: OptionSet, Sendable {
+  private struct StateFlags: OptionSet, Sendable {
     let rawValue: UInt8
 
     init(rawValue: UInt8) {
@@ -19,20 +15,19 @@ struct TaskNode: CustomStringConvertible, Sendable, Equatable {
     static let invalidated = StateFlags(rawValue: 1 << 2)
   }
 
-  struct State: Sendable {
+  private struct State: Sendable {
     var flags: StateFlags = []
     var anyTask: Task<Void, Error>?
-    var next: TaskNode?
     var continuations: [CheckedContinuation<Void, Never>] = []
   }
 
   /// Completes the caller-facing task when this node is invalidated before activation.
   private let onInvalidation: @Sendable () -> Void
 
-  let taskFactory: @Sendable (TaskNode) async -> Void
-  let label: String
+  private let taskFactory: @Sendable (TaskNode) async -> Void
+  private let label: String
   let id: UUID
-  let state: OSAllocatedUnfairLock<State>
+  private let state: OSAllocatedUnfairLock<State>
 
   init(
     label: String = "",
@@ -96,24 +91,6 @@ struct TaskNode: CustomStringConvertible, Sendable, Equatable {
     }
   }
 
-  func addNext(_ node: TaskNode) {
-    state.withLock { state in
-      guard state.next == nil else {
-        assertionFailure("next is already set.")
-        return
-      }
-      state.next = node
-    }
-  }
-
-  func endpoint() -> TaskNode {
-    var current = self
-    while let next = current.state.withLock({ $0.next }) {
-      current = next
-    }
-    return current
-  }
-
   func wait() async {
     await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
       state.withLock { state in
@@ -127,21 +104,7 @@ struct TaskNode: CustomStringConvertible, Sendable, Equatable {
   }
 
   var description: String {
-    var chain: [String] = []
-    var current: TaskNode? = self
-    while let node = current {
-      chain.append("<\(node.id)>:\(node.label)")
-      current = node.state.withLock { $0.next }
-    }
-    return chain.joined(separator: " -> ")
-  }
-
-  func forEach(_ closure: (TaskNode) -> Void) {
-    var current: TaskNode? = self
-    while let node = current {
-      closure(node)
-      current = node.state.withLock { $0.next }
-    }
+    "<\(id)>:\(label)"
   }
 
   static func == (lhs: TaskNode, rhs: TaskNode) -> Bool {
