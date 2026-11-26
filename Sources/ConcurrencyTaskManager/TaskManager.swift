@@ -84,8 +84,7 @@ public struct TaskKey: Hashable, Sendable, ExpressibleByStringLiteral {
 
 /**
  A class that manages tasks by specified keys.
- It enqueues a given task into a separated queue by key.
- Consumers can specify how to handle the current task as dropping it or waiting for it.
+ Each key has its own queue. The mode decides how to handle a submission for an occupied key.
  */
 public final class TaskManager: Sendable {
 
@@ -105,6 +104,11 @@ public final class TaskManager: Sendable {
      Waits the current task finished then start a new task.
      */
     case waitInCurrent
+
+    /// Discards the new operation if the key already has running or queued work.
+    ///
+    /// The returned task is cancelled and its value throws `CancellationError`.
+    case dropIfBusy
   }
 
   private struct State: Sendable {
@@ -165,7 +169,7 @@ public final class TaskManager: Sendable {
   /// - Parameters:
   ///   - label: String value for debugging
   ///   - key: ``TaskKey`` value takes associated operations. It creates queues for each key.
-  ///   - mode: Mode tells the queue how controls the given new operation. to run immediately with drop all current operation or wait all them.
+  ///   - mode: How to handle a submission when the key has running or queued work.
   ///   - priority:
   ///   - action:
   /// - Returns: An Task to track the operation's completion.
@@ -196,65 +200,45 @@ public final class TaskManager: Sendable {
     ) { [weak self] node in
 
       await withTaskCancellationHandler {
+        let result: Result<Return, Error>
         do {
-          let result = try await Self.performOperation(operation, isolation: operation.isolation)
-
-          guard Task.isCancelled == false else {
-            extendedContinuation.resume(throwing: CancellationError())
-            return
-          }
-
-          extendedContinuation.resume(returning: result)
-
+          result = .success(try await Self.performOperation(operation, isolation: operation.isolation))
         } catch {
-
-          guard Task.isCancelled == false else {
-            extendedContinuation.resume(throwing: CancellationError())
-            return
-          }
-
-          extendedContinuation.resume(throwing: error)
-
+          result = .failure(error)
         }
+
+        // Release the queue slot before a caller can submit again after awaiting value.
+        self?.loopback(key: key, completedNode: node)
+
+        if Task.isCancelled {
+          extendedContinuation.resume(throwing: CancellationError())
+        } else {
+          extendedContinuation.resume(with: result)
+        }
+
       } onCancel: {
         referenceTask.cancel()
       }
 
-      // connecting to the next if presents
-
-      guard let self = self else { return }
-      
-      self.loopback(
-        key: key,
-        completedNode: node
-      )
-
     }
 
     state.withLock { state in
-      switch mode {
-      case .dropCurrent:
-
-        state.queues[key]?.forEach {
-          $0.invalidate()
-        }
-
-        state.queues[key] = newNode
-        if state.isRunning {
-          newNode.activate()
-        }
-
-      case .waitInCurrent:
-
-        if let head = state.queues[key] {
+      if let head = state.queues[key] {
+        switch mode {
+        case .dropCurrent:
+          head.forEach { $0.invalidate() }
+        case .waitInCurrent:
           head.endpoint().addNext(newNode)
-        } else {
-          state.queues[key] = newNode
-          if state.isRunning {
-            newNode.activate()
-          }
+          return
+        case .dropIfBusy:
+          newNode.invalidate()
+          return
         }
+      }
 
+      state.queues[key] = newNode
+      if state.isRunning {
+        newNode.activate()
       }
     }
 
