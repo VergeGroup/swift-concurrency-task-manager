@@ -250,9 +250,15 @@ func dummyTask<V>(_ v: V, nanoseconds: UInt64) async -> V {
     #expect(discarded.isCancelled)
     #expect(events.value.isEmpty)
 
+    let discardedCompleted = UnfairLockAtomic(false)
+    Task {
+      await expectCancellation(from: discarded)
+      discardedCompleted.value = true
+    }
+    #expect(await waitUntil { discardedCompleted.value })
+
     manager.setIsRunning(true)
 
-    await expectCancellation(from: discarded)
     try await first.value
     #expect(events.value == ["first"])
   }
